@@ -12,9 +12,27 @@ python3 -m venv .venv
 ./demo.sh --pause 2
 ```
 
-The demo starts and stops its own loopback JetStream broker. Watch two peers decrypt a message using X25519 and ML-KEM, reject a two-vote proposal, then swap ML-KEM for Classic McEliece at the epoch boundary once a third vote arrives. The new key decrypts the next message and rejects the pre-swap packet. The server's subscriber goes offline and both peers use all three rails until it reconnects and catches up. [Transcript from a live run](verification/demo-results.txt)
+The demo starts and stops its own loopback JetStream broker. The peers start on X25519 and ML-KEM-768, reject a two-vote proposal, and stage the swap when the third signed vote arrives. The live transcript shows what happens at the epoch boundary. [Full live transcript](verification/demo-results.txt)
+
+```text
+  JetStream seq 2  3/5 votes accepted, epoch 1 staged on both peers
+  Traffic key      Unchanged while the policy is staged
+  Epoch boundary   Both peers switched using secrets from the initial exchange
+  Active rails     X25519 + Classic-McEliece-348864
+  Client sent      46ed5cdbfa2bf2cde8daf3a2… (37 bytes of ciphertext and tag)
+  Server decrypted "After the policy swap"
+  New key rejected the packet encrypted before the swap
+```
+
+The demo then disconnects the server's subscriber. Both peers use all three rails until the subscriber reconnects and catches up.
 
 The detector reads scripted lab signals. The KEM exchanges, Ed25519 and SLH-DSA signatures, JetStream deliveries, and ChaCha20-Poly1305 encryption all execute live. The two peers pass application packets and boundary offers in process. Set `--pause` to the number of seconds between stages, or omit it for an uninterrupted run.
+
+## Planned benchmark
+
+Compare two ways to handle the same signed lattice swap. One preloads the McEliece backup during the initial handshake. The other starts with X25519 and ML-KEM-768 and runs a fresh X25519 and McEliece exchange at the swap.
+
+Measure bytes sent at setup and at the swap, plus the time from the scheduled boundary to the first successfully decrypted message. Repeat at different network delays and packet loss rates to see when faster swaps justify the additional 261,216 setup bytes per session.
 
 ## Architecture
 
