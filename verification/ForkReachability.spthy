@@ -1,0 +1,31 @@
+theory ForkReachability begin
+functions: ed/2, slh/2
+// Witness slice: one roster, one lattice epoch. Only voters 1 and 2
+// disclose their signing keys. Each remaining voter can endorse once.
+rule Setup:
+ [Fr(~p),Fr(~a),Fr(~b),Fr(~c),Fr(~d),Fr(~e)]
+ --[SetupOnce()]-> [Out(<~a,~b>), !Bad(~a,~b),
+ Honest(~c),Honest(~d),Honest(~e),!Eligible(~c),!Eligible(~d),!Eligible(~e),Waiting(~p)]
+restriction single_setup: "All #i #j. SetupOnce()@i & SetupOnce()@j ==> #i=#j"
+rule HonestVote:
+ let m=<'lattice','epoch3',tier>
+ in [Honest(k),In(tier)] --[HonestSigned(k,m)]->
+ [Out(<ed(k,m),slh(k,m)>)]
+// Each signer key is a master term with separate Ed and SLH constructors.
+// Restrict to the two compromised shares plus one distinct roster member.
+rule CertificateDelivery:
+ let m=<'lattice','epoch3',tier>
+ in [!Bad(a,b),!Eligible(k), In(<tier,ed(a,m),slh(a,m),ed(b,m),slh(b,m),ed(k,m),slh(k,m)>)]
+ --[Assembled(k,m)]-> [!Certificate(m)]
+rule FirstDelivery:
+ [Waiting(p),!Certificate(m)] --[Received(p,m)]-> [Holding(p,m)]
+rule SecondDelivery:
+ [Holding(p,m),!Certificate(n)] --[Different(m,n),Received(p,n),Conflict(p,m,n)]-> []
+restriction distinct: "All x #i. Different(x,x)@i ==> F"
+// Connect validated certificate shares to their sole honest signing origin.
+lemma certificate_sources [sources]:
+ "All k m #i. Assembled(k,m)@i ==> (Ex #j. HonestSigned(k,m)@j & j<i)"
+lemma two_certificates_one_peer: exists-trace
+ "Ex p #i #j. Received(p,<'lattice','epoch3','swap'>)@i &
+ Conflict(p,<'lattice','epoch3','swap'>,<'lattice','epoch3','normal'>)@j & i<j"
+end

@@ -1,0 +1,132 @@
+theory Boundary begin
+functions: hkdf/5
+// A cut at an arbitrary boundary. a,b are arbitrary policy snapshots,
+// including unreachable ones. A fresh r identifies this session/round.
+// Both endpoints receive the actual offers, as in boundary(pair, epoch).
+rule Snapshot:
+ let a=<ea,ha,ta,fa>
+     b=<eb,hb,tb,fb>
+ in [In(<a,b,e>),Fr(~r),Fr(~transcript),Fr(~x),Fr(~l),Fr(~c)]
+ --[Boundary(~r,a,b,e),Material(~r,~x,~l,~c)]->
+ [Input('client',~r,a,b,e,~transcript,<~x,~l,~c>),
+  Input('server',~r,b,a,e,~transcript,<~x,~l,~c>)]
+// Compute a common offer encoding locally. Role order represents the
+// deterministic canonicalization of both genuine offers in Python.
+rule ClientContext:
+ [Input('client',r,local,remote,e,tr,s)] -->
+ [Work('client',r,local,remote,e,<tr,r,e,local,remote>,s)]
+rule ServerContext:
+ [Input('server',r,local,remote,e,tr,s)] -->
+ [Work('server',r,local,remote,e,<tr,r,e,remote,local>,s)]
+rule Tables:
+ [] --> [!Policy('normal','xl'),!Policy('watch','xl'),!Policy('warn','xl'),
+         !Policy('swap','xc'),!Policy('classical-break','lc'),!Policy('suspend','stop')]
+rule Agree:
+ let a=<e,h,t,'clear'>
+ in [Work(p,r,a,a,e,ctx,s),!Policy(t,rails)]
+ --[Agreed(p,r,e,t)]-> [Mix(p,r,e,'rail-swap-v1',ctx,s,rails)]
+// Fallback labels bind the traffic epoch e and both accepted policy epochs
+// (client view ea, server view eb, canonical order taken from ctx), so a
+// fallback key can never be read as activation of policy epoch e.
+rule Mismatch:
+ let ctx=<tr,r,e,<ea,ha,ta,fa>,<eb,hb,tb,fb>>
+ in [Work(p,r,a,b,e,ctx,s)]
+ --[Diff(a,b),Dispute(p,r)]-> [Mix(p,r,e,<'all-rails-fallback-v1',e,ea,eb>,ctx,s,'xlc')]
+rule WrongEpoch:
+ let a=<local,h,t,f>
+     ctx=<tr,r,e,a,a>
+ in [Work(p,r,a,a,e,ctx,s)]
+ --[Diff(local,e),Dispute(p,r)]-> [Mix(p,r,e,<'all-rails-fallback-v1',e,local,local>,ctx,s,'xlc')]
+rule ObservedFork:
+ let a=<e,h,t,'fork'>
+     ctx=<tr,r,e,a,a>
+ in [Work(p,r,a,a,e,ctx,s)]
+ --[Dispute(p,r)]-> [Mix(p,r,e,<'all-rails-fallback-v1',e,e,e>,ctx,s,'xlc')]
+restriction unequal: "All x #i. Diff(x,x)@i ==> F"
+
+rule Combine_xl:
+ let key=hkdf(<x,l>,ctx,label,e,'xl')
+ in [Mix(p,r,e,label,ctx,<x,l,c>,'xl')]
+ --[Key(p,r,e,'xl',key),InputContext(p,r,ctx,label)]-> []
+
+rule Combine_xc:
+ let key=hkdf(<x,c>,ctx,label,e,'xc')
+ in [Mix(p,r,e,label,ctx,<x,l,c>,'xc')]
+ --[Key(p,r,e,'xc',key),InputContext(p,r,ctx,label)]-> []
+
+rule Combine_lc:
+ let key=hkdf(<l,c>,ctx,label,e,'lc')
+ in [Mix(p,r,e,label,ctx,<x,l,c>,'lc')]
+ --[Key(p,r,e,'lc',key),InputContext(p,r,ctx,label)]-> []
+
+rule Combine_xlc:
+ let key=hkdf(<x,l,c>,ctx,label,e,'xlc')
+ in [Mix(p,r,e,label,ctx,<x,l,c>,'xlc')]
+ --[Key(p,r,e,'xlc',key),InputContext(p,r,ctx,label)]-> []
+rule Suspend:
+ [Mix(p,r,e,label,ctx,s,'stop')] --[Suspended(p,r)]-> []
+lemma fail_safe:
+ "All p r e m k #i #j. Dispute(p,r)@i & Key(p,r,e,m,k)@j ==> m='xlc'"
+lemma disagreement_uses_all:
+ "All a b p r e m k #i #j. Boundary(r,a,b,e)@i & not(a=b) & Key(p,r,e,m,k)@j ==> m='xlc'"
+lemma fork_uses_all:
+ "All h t a p r e m k #i #j. Boundary(r,<e,h,t,'fork'>,a,e)@i & Key(p,r,e,m,k)@j ==> m='xlc'"
+lemma missed_epoch_uses_all:
+ "All r le h t f b e p m k #i #j. Boundary(r,<le,h,t,f>,b,e)@i &
+ not(le=e) & Key(p,r,e,m,k)@j ==> m='xlc'"
+lemma no_one_sided_suspension:
+ "All p q r e m k #i #j. Suspended(p,r)@i & Key(q,r,e,m,k)@j ==> F"
+lemma pq_input_bound:
+ "All p r e mode key x l c ctx label #i #j. Material(r,x,l,c)@i & Key(p,r,e,mode,key)@j & InputContext(p,r,ctx,label)@j ==>
+ (key=hkdf(<x,l>,ctx,label,e,mode) | key=hkdf(<x,c>,ctx,label,e,mode)
+ | key=hkdf(<l,c>,ctx,label,e,mode) | key=hkdf(<x,l,c>,ctx,label,e,mode))"
+lemma certified_lattice_swap_selects_backup:
+ "All r e h p m k #i #j. Boundary(r,<e,h,'swap','clear'>,<e,h,'swap','clear'>,e)@i &
+ Key(p,r,e,m,k)@j ==> m='xc'"
+lemma agreement:
+ "All r e m k n q #i #j. Key('client',r,e,m,k)@i & Key('server',r,e,n,q)@j
+ ==> m=n & k=q"
+lemma no_classical_only:
+ "All p r e m k #i. Key(p,r,e,m,k)@i ==> m='xl' | m='xc' | m='lc' | m='xlc'"
+lemma swap_reachable: exists-trace
+ "Ex r e k #i #j. Key('client',r,e,'xc',k)@i & Key('server',r,e,'xc',k)@j"
+lemma warn_reachable: exists-trace
+ "Ex r e k #i #j. Agreed('client',r,e,'warn')@i & Key('client',r,e,'xl',k)@j"
+lemma fallback_reachable: exists-trace
+ "Ex r e k #i #j. Dispute('client',r)@i & Key('client',r,e,'xlc',k)@j"
+lemma observed_fork_witness: exists-trace
+ "Ex r e h k #i #j. Boundary(r,<e,h,'swap','fork'>,<e,h,'swap','fork'>,e)@i &
+ Key('server',r,e,'xlc',k)@j"
+// The withheld-epoch trace is intended fail-safe behaviour: both peers stay at
+// accepted policy epoch 2 and derive a matching all-secret key for traffic
+// epoch 3 whose label records "traffic 3, policy 2/2".
+lemma withheld_epoch_witness: exists-trace
+ "Ex r k ctx #i #j #l. Boundary(r,<'2','h','warn','clear'>,<'2','h','warn','clear'>,'3')@i &
+ Key('client',r,'3','xlc',k)@j & Key('server',r,'3','xlc',k)@l &
+ InputContext('client',r,ctx,<'all-rails-fallback-v1','3','2','2'>)@j"
+// Restatement of the former every_traffic_epoch_matches_local_policy lemma.
+// (a) Policy activation: the activation label is only used when both peers'
+// accepted policy epoch equals the traffic epoch and their offers agree.
+lemma activation_label_implies_policy_epoch:
+ "All p r e m k ctx #j. Key(p,r,e,m,k)@j & InputContext(p,r,ctx,'rail-swap-v1')@j
+ ==> (Ex h t #i. Boundary(r,<e,h,t,'clear'>,<e,h,t,'clear'>,e)@i)"
+// (b) Fallback key for a traffic epoch: whenever either peer's accepted policy
+// epoch differs from the traffic epoch, the key is an all-secret key whose
+// label carries the traffic epoch and both accepted policy epochs.
+lemma traffic_epoch_ahead_of_policy_is_labeled_fallback:
+ "All r e ea ha ta fa eb hb tb fb p m k ctx label #i #j.
+ Boundary(r,<ea,ha,ta,fa>,<eb,hb,tb,fb>,e)@i & Key(p,r,e,m,k)@j &
+ InputContext(p,r,ctx,label)@j & (not(ea=e) | not(eb=e))
+ ==> m='xlc' & label=<'all-rails-fallback-v1',e,ea,eb>"
+// The peer's own epoch occupies its role's canonical policy slot.
+// Python sorts the two epochs numerically (the same unordered pair).
+lemma fallback_matches_accepted_policy:
+ "All r e ea ha ta fa eb hb tb fb p k ctx label #i #j.
+ Boundary(r,<ea,ha,ta,fa>,<eb,hb,tb,fb>,e)@i & Key(p,r,e,'xlc',k)@j &
+ InputContext(p,r,ctx,label)@j ==> label=<'all-rails-fallback-v1',e,ea,eb>"
+lemma fallback_agreement:
+ "All r e a h t f hh tt ff m n k q #i #j #l.
+ Boundary(r,<a,h,t,f>,<a,hh,tt,ff>,e)@i & not(a=e) &
+ Key('client',r,e,m,k)@j & Key('server',r,e,n,q)@l
+ ==> k=q & m='xlc' & n='xlc'"
+end

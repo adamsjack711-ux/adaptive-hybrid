@@ -1,0 +1,82 @@
+theory ForkWitness begin
+builtins: hashing, natural-numbers
+functions: ed/2 [private], slh/2 [private]
+
+// The only usable voter IDs are provisioned here. Signed tokens may be
+// copied, delayed or recombined on the public network. All voters may
+// equivocate: safety does not assume uniqueness of a threshold certificate.
+rule Roster:
+ [] --> [!V('1'),!V('2'),!V('3'),!V('4'),!V('5')]
+rule Vote:
+ [!V(v), In(m)]
+ --[ Endorse(v,m) ]->
+ [Out(<ed(v,m),slh(v,m)>)]
+rule AllowedNonLattice:
+ [] --> [!Other('classical'), !Other('hash'), !Other('code')]
+rule CheckOther:
+ let m=<a,body>
+ in [!Other(a),In(<v,m,ed(v,m)>)] --> [!Checked(v,m)]
+rule CheckLattice:
+ let m=<'lattice',body>
+ in [In(<v,m,ed(v,m),slh(v,m)>)] --[DualCheck(v,m)]-> [!Checked(v,m)]
+rule Threshold:
+ [!Checked(a,m),!Checked(b,m),!Checked(c,m)]
+ --[Diff(a,b),Diff(a,c),Diff(b,c),Certified(m)]-> [!Cert(m)]
+restriction unequal: "All x #i. Diff(x,x)@i ==> F"
+
+rule Start:
+ [Fr(~p)] --> [State(~p,%1,'genesis','normal','clear')]
+rule Advance:
+ let m = <a,<%e %+ %1,t,b>>
+ in [State(p,%e,h0,old,f),!Cert(m)]
+ --[Stage(p,%e,%e %+ %1,m),From(p,h0,old,f),FlagUpdate(p,f,f)]->
+ [State(p,%e %+ %1,h(<h0,m>),m,f), !Entry(p,h(<h0,m>),m)]
+rule Conflict:
+ let m = <a,<%e,t,b>>
+ in [State(p,%e,h0,<oa,<%e,ot,ob>>,f),!Cert(m)]
+ --[Diff(<oa,<%e,ot,ob>>,m),Fork(p,%e),Compared(p,<oa,<%e,ot,ob>>,m),FlagUpdate(p,f,'fork')]->
+ [State(p,%e,h0,<oa,<%e,ot,ob>>,'fork')]
+// Exact replay causes no stage or activation. An old epoch is discarded
+// without a state change, so stale deliveries can be omitted as stuttering.
+rule SameBody:
+ [State(p,e,h0,m,f),!Cert(m)]
+ --[Compared(p,m,m),FlagUpdate(p,f,f)]-> [State(p,e,h0,m,f)]
+rule PolicyBoundary:
+ [State(p,%e,h0,<a,<%e,t,b>>,'clear'), !Entry(p,h0,<a,<%e,t,b>>), In(<'matching-offer',%e>)]
+ --[PolicyActive(p,%e,<a,<%e,t,b>>),FlagUpdate(p,'clear','clear')]->
+ [State(p,%e,h0,<a,<%e,t,b>>,'clear')]
+
+lemma conflict_sets_fork:
+ "All p old new #i. Compared(p,old,new)@i & not(old=new) ==>
+ (Ex f. FlagUpdate(p,f,'fork')@i)"
+lemma fork_preserved_each_step:
+ "All p f #i. FlagUpdate(p,'fork',f)@i ==> f='fork'"
+lemma distinct_endorsements:
+ "All m #i. Certified(m)@i ==> (Ex a b c #x #y #z.
+ Endorse(a,m)@x & Endorse(b,m)@y & Endorse(c,m)@z &
+ x<i & y<i & z<i & not(a=b) & not(b=c) & not(a=c))"
+lemma lattice_needs_dual_checks:
+ "All b #i. Certified(<'lattice',b>)@i ==> (Ex a c d #j #k #l.
+ DualCheck(a,<'lattice',b>)@j & DualCheck(c,<'lattice',b>)@k & DualCheck(d,<'lattice',b>)@l &
+ j<i & k<i & l<i & not(a=c) & not(a=d) & not(c=d))"
+lemma lattice_certificate_reachable: exists-trace
+ "Ex #i. Certified(<'lattice','example'>)@i"
+lemma certified_step:
+ "All p e n m #i. Stage(p,e,n,m)@i ==> (Ex #j. Certified(m)@j & j<i)"
+lemma exact_successor:
+ "All p %e %n m #i. Stage(p,%e,%n,m)@i ==> %n = %e %+ %1"
+lemma active_requires_certificate:
+ "All p e m #i. PolicyActive(p,e,m)@i ==> (Ex #j. Certified(m)@j & j<i)"
+lemma no_replay_or_rollback:
+ "All p %e %n m #i. Stage(p,%e,%n,m)@i ==> not (%n=%e | (Ex %d. %e=%n %+ %d))"
+lemma first_swap_reachable: exists-trace
+ "Ex p #i. From(p,'genesis','normal','clear')@i &
+ Stage(p,%1,%1 %+ %1,<'lattice',<%1 %+ %1,'swap','signal'>>)@i"
+
+// End-to-end fork witness: one peer assembles a certificate, advances to it,
+// then assembles a second, different certificate for the same epoch and
+// consumes it as a fork. Both certificates must pass the 3-of-5 checks.
+lemma two_certificate_fork_witness: exists-trace
+ "Ex p e m1 m2 #i #j #k. Certified(m1)@i & Certified(m2)@j & not(m1=m2) &
+  Compared(p,m1,m2)@k & Fork(p,e)@k & i<k & j<k"
+end

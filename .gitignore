@@ -1,0 +1,50 @@
+# Local Python environments and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.hypothesis/
+
+# JetStream and verifier scratch data
+jetstream/
+jetstream-data/
+.nats/
+.tamarin/
+.proverif/
+tamarin-tmp/
+proverif-tmp/
+verification/tmp/
+*.spthy.tmp
+*.spthy.out
+*.pv.out
+*.log
+
+# Local exports and backups
+/adaptive-hybrid-portfolio.zip
+/verification/backup-*/
+*.bak
+.DS_Store
+
+# Credentials and private key material
+.env
+.env.*
+*.env
+.envrc
+.netrc
+*.pem
+*.der
+*.pkcs8
+*.key
+*.p12
+*.pfx
+*.jks
+*.creds
+*.nk
+*.nkey
+id_rsa
+id_ed25519
+.secrets/
+secrets/
+credentials/
+secrets.json
+credentials.json

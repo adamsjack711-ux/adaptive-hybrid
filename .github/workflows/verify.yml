@@ -1,0 +1,72 @@
+name: Verify
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      exploratory_fork:
+        description: Run the exploratory end-to-end fork search (may time out)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - run: python -m pytest -q
+        env:
+          HYPOTHESIS_PROFILE: ci
+
+  proverif:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Build ProVerif 2.05
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ocaml build-essential
+          cd "$RUNNER_TEMP"
+          curl --fail --silent --show-error --location https://proverif.inria.fr/proverif2.05.tar.gz --output proverif.tar.gz
+          echo "4871f53c32ab4a04669a060c4886ba5d9080496963fb980a9a62d2c429ceabc4  proverif.tar.gz" | sha256sum --check
+          tar -xzf proverif.tar.gz
+          cd proverif2.05
+          ./build -nointeract
+          echo "$PWD" >> "$GITHUB_PATH"
+      - run: ./verification/crosscheck.sh
+
+  tamarin:
+    name: Tamarin (${{ matrix.suite }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: ${{ fromJSON(github.event_name == 'workflow_dispatch' && (inputs.exploratory_fork && '["fast","slow","exploratory"]' || '["fast","slow"]') || '["fast"]') }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install Tamarin 1.12.0 and Maude 3.5.1
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends graphviz unzip
+          mkdir -p "$RUNNER_TEMP/tamarin"
+          cd "$RUNNER_TEMP/tamarin"
+          curl --fail --silent --show-error --location https://github.com/tamarin-prover/tamarin-prover/releases/download/1.12.0/tamarin-prover-1.12.0-linux64-ubuntu.tar.gz --output tamarin.tar.gz
+          echo "201be06f469e47cff554df6ca93db8366fc2c69d70c61fcbd1370a1074b469c6  tamarin.tar.gz" | sha256sum --check
+          tar -xzf tamarin.tar.gz
+          curl --fail --silent --show-error --location https://github.com/maude-lang/Maude/releases/download/Maude3.5.1/Maude-3.5.1-linux-x86_64.zip --output maude.zip
+          echo "72ed1ca87e3b3d0dfc6ee1436baf154bf04c45ff97d521bec040c5e8dfc8f92c  maude.zip" | sha256sum --check
+          unzip -q maude.zip
+          echo "$PWD" >> "$GITHUB_PATH"
+      - run: ./verification/verify.sh "--${SUITE}"
+        env:
+          SUITE: ${{ matrix.suite }}

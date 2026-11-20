@@ -1,0 +1,54 @@
+summary of summaries:
+
+analyzed: Advisory.spthy
+
+  processing time: 7.39s
+
+  conflict_sets_fork (all-traces): verified (4 steps)
+  fork_preserved_each_step (all-traces): verified (5 steps)
+  distinct_endorsements (all-traces): verified (522 steps)
+  lattice_needs_dual_checks (all-traces): verified (132 steps)
+  lattice_certificate_reachable (exists-trace): verified (8 steps)
+  certified_step (all-traces): verified (37 steps)
+  exact_successor (all-traces): verified (2 steps)
+  active_requires_certificate (all-traces): verified (37 steps)
+  no_replay_or_rollback (all-traces): verified (1 steps)
+  first_swap_reachable (exists-trace): verified (8 steps)
+
+==============================================================================
+summary of summaries:
+
+analyzed: Boundary.spthy
+
+  processing time: 6.31s
+
+  fail_safe (all-traces): verified (35 steps)
+  disagreement_uses_all (all-traces): verified (16 steps)
+  fork_uses_all (all-traces): verified (6 steps)
+  missed_epoch_uses_all (all-traces): verified (16 steps)
+  no_one_sided_suspension (all-traces): verified (16 steps)
+  pq_input_bound (all-traces): verified (38 steps)
+  certified_lattice_swap_selects_backup (all-traces): verified (10 steps)
+  agreement (all-traces): verified (146 steps)
+  no_classical_only (all-traces): verified (6 steps)
+  swap_reachable (exists-trace): verified (6 steps)
+  warn_reachable (exists-trace): verified (6 steps)
+  fallback_reachable (exists-trace): verified (6 steps)
+  observed_fork_witness (exists-trace): verified (4 steps)
+  withheld_epoch_witness (exists-trace): verified (7 steps)
+  activation_label_implies_policy_epoch (all-traces): verified (22 steps)
+  traffic_epoch_ahead_of_policy_is_labeled_fallback (all-traces): verified (84 steps)
+  fallback_matches_accepted_policy (all-traces): verified (15 steps)
+  fallback_agreement (all-traces): verified (80 steps)
+
+==============================================================================
+summary of summaries:
+
+analyzed: ForkReachability.spthy
+
+  processing time: 8.13s
+
+  certificate_sources (all-traces): verified (215 steps)
+  two_certificates_one_peer (exists-trace): verified (21 steps)
+
+==============================================================================

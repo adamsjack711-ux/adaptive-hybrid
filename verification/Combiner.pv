@@ -1,0 +1,51 @@
+(* Boundary abstraction: both peers already have the same KEM secrets and
+   genuine offers. The bus attacker may choose an arbitrary boundary case. *)
+free net: channel.
+const agreed, disputed, normal, swapped, classicalBreak, allRails: bitstring.
+const active, fallback, leftRole, rightRole: bitstring.
+reduc enabledClassicalBreak(classicalBreak) = classicalBreak.
+fun hkdf(bitstring,bitstring,bitstring,bitstring): bitstring.
+fun tag(bitstring,bitstring,bitstring,bitstring): bitstring.
+fun confirm(bitstring,bitstring): bitstring.
+event clientKey(bitstring,bitstring,bitstring).
+event serverKey(bitstring,bitstring,bitstring).
+query r:bitstring,m:bitstring,k:bitstring;
+ event(clientKey(r,m,k)) && attacker(k) ==> false.
+query r:bitstring,m:bitstring,k:bitstring;
+ event(serverKey(r,m,k)) && attacker(k) ==> false.
+query r:bitstring,m:bitstring,k:bitstring;
+ inj-event(serverKey(r,m,k)) ==> inj-event(clientKey(r,m,k)).
+query r:bitstring,k:bitstring; event(serverKey(r,normal,k)).
+query r:bitstring,k:bitstring; event(serverKey(r,swapped,k)).
+query r:bitstring,k:bitstring; event(serverKey(r,classicalBreak,k)).
+query r:bitstring,k:bitstring; event(serverKey(r,allRails,k)).
+
+letfun endpoint(role:bitstring, local:bitstring, remote:bitstring, traffic:bitstring,
+                tr:bitstring,r:bitstring,x:bitstring,l:bitstring,c:bitstring) =
+ let (le:bitstring,lt:bitstring,lf:bitstring) = local in
+ let (re:bitstring,rt:bitstring,rf:bitstring) = remote in
+ let views = if role=leftRole then (local,remote) else (remote,local) in
+ let ctx = (tr,r,traffic,views) in
+ if local=remote && le=traffic && lf=agreed then
+   if lt=normal then (normal,hkdf((x,l),ctx,active,normal))
+   else if lt=swapped then (swapped,hkdf((x,c),ctx,active,swapped))
+   else (enabledClassicalBreak(lt),hkdf((l,c),ctx,active,classicalBreak))
+ else
+   let label = if role=leftRole then tag(fallback,traffic,le,re)
+               else tag(fallback,traffic,re,le) in
+   (allRails,hkdf((x,l,c),ctx,label,allRails)).
+
+process !
+ in(net,(a:bitstring,b:bitstring,e:bitstring,leakSide:bool));
+ new x:bitstring; new l:bitstring; new c:bitstring;
+ new r:bitstring; new tr:bitstring; new barrier:channel;
+ out(net,(r,tr));
+ let (m:bitstring,k:bitstring)=endpoint(leftRole,a,b,e,tr,r,x,l,c) in
+ (* Reveal all rail secrets except one selected active PQ secret. *)
+ ( (if m=normal then out(net,(x,c))
+    else if m=swapped then out(net,(x,l))
+    else (if leakSide then out(net,(x,l)) else out(net,(x,c)))) |
+   (event clientKey(r,m,k); out(net,confirm(k,r)); out(barrier,r)) |
+   (in(barrier,=r);
+    let (sm:bitstring,sk:bitstring)=endpoint(rightRole,b,a,e,tr,r,x,l,c) in
+    event serverKey(r,sm,sk); out(net,confirm(sk,r))) )

@@ -1,0 +1,8 @@
+cryptography
+liboqs-python==0.16.0.2
+# The wrapper requires a matching native liboqs shared library with both KEMs.
+# For its automatic first-import build, install git, CMake and a C compiler.
+# https://github.com/open-quantum-safe/liboqs-python#installation
+
+nats-py==2.17.0
+# Start a local JetStream broker with nats-server -js before running the fleet.

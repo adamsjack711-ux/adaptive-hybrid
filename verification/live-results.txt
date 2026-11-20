@@ -1,0 +1,16 @@
+Reference run on NATS Server 2.15.3 with native liboqs 0.16.0.
+
+PASS withheld epoch 3: all rails, accepted policy 2, matching keys
+PASS signer lost before share delivery: two rejected, surviving quorum activated
+PASS republished epoch 1: fresh stream sequence, policy and keys preserved
+PASS conflicting valid epoch 3: fork latched through epoch 4, all rails
+PASS out-of-order epoch 2: rejected over the gap, both peers fell back
+PASS delayed peer: fallback during split delivery, active keys after catch-up
+  recovered stream last sequence 10, latest publish 10
+  chaos-left: persisted ack floor 7, application cursor 10, pending 2, ack pending 1
+  chaos-right: persisted ack floor 7, application cursor 9, pending 2, ack pending 1
+PASS hard broker restart mid-epoch: pending traffic recovered, peers converged on epoch 2
+PASS duplicate and malformed publications after restart: policy and keys preserved
+Key comparison median µs (equal / first-byte / last-byte mismatch): 0.082 / 0.084 / 0.083
+Ed25519 verification median µs (valid / altered body): 85.392 / 82.587
+SLH-DSA verification median µs (valid / altered body): 1255.933 / 1242.058
