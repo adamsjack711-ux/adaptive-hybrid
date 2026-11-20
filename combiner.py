@@ -31,6 +31,8 @@ class Peer:
         digest = hashlib.sha256(advisory.encode()).digest()
         if epoch < self.epoch:
             reason = "stale epoch"
+        elif epoch not in (self.epoch, self.epoch + 1):
+            reason = "missing earlier epoch"
         elif epoch == self.epoch and digest == self.last_digest:
             reason = "replay"
         elif advisory.assumption not in self.states or advisory.tier not in TIERS:
@@ -40,8 +42,6 @@ class Peer:
         elif epoch == self.epoch:
             self.fork = True
             reason = "conflicting certified advisory"
-        elif epoch != self.epoch + 1:
-            reason = "missing earlier epoch"
         else:
             self.epoch, self.last_digest = epoch, digest
             self.head = hashlib.sha256(self.head + digest).digest()

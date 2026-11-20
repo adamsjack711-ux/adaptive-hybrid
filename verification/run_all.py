@@ -5,7 +5,8 @@ import sys
 import traceback
 from contextlib import ExitStack
 
-from verification.live_checks import broker, run_live
+from verification.broker import broker
+from verification.live_checks import run_live
 
 
 def main():
@@ -32,6 +33,7 @@ def main():
             results["Live JetStream and chaos tests"] = "FAIL (broker unavailable)"
         else:
             check("Live JetStream and chaos tests", lambda: run_live(instance))
+        check("Live demo", lambda: command(sys.executable, "-u", "-m", "verification.demo"))
         check("Tamarin", lambda: command("./verification/verify.sh"))
         check("ProVerif", lambda: command("./verification/crosscheck.sh"))
 

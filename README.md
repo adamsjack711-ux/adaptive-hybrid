@@ -2,6 +2,20 @@
 
 Adaptive Hybrid is a research prototype for changing a session’s cryptographic policy after its initial handshake. It explores whether endpoints can pay the cost of a backup key exchange up front, then switch primitives at a scheduled epoch boundary without another KEM exchange.
 
+## Live demo
+
+Run from the repository root with Python 3.12+, `nats-server`, and the matching liboqs build described below. [Local setup](#run-locally)
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+./demo.sh --pause 2
+```
+
+The demo starts and stops its own loopback JetStream broker. Watch two peers decrypt a message using X25519 and ML-KEM, reject a two-vote proposal, then swap ML-KEM for Classic McEliece at the epoch boundary once a third vote arrives. The new key decrypts the next message and rejects the pre-swap packet. The server's subscriber goes offline and both peers use all three rails until it reconnects and catches up. [Transcript from a live run](verification/demo-results.txt)
+
+The detector reads scripted lab signals. The KEM exchanges, Ed25519 and SLH-DSA signatures, JetStream deliveries, and ChaCha20-Poly1305 encryption all execute live. The two peers pass application packets and boundary offers in process. Set `--pause` to the number of seconds between stages, or omit it for an uninterrupted run.
+
 ## Architecture
 
 The handshake establishes three independent secrets. Normal operation combines X25519 and ML-KEM-768 in HKDF. A certified lattice swap replaces ML-KEM with Classic McEliece-348864. A classical swap uses both post-quantum rails.
@@ -38,7 +52,7 @@ The message parser rejects duplicate fields, unknown fields and mismatched subje
 
 ## Threat model
 
-An adversary can delay, reorder, replay, withhold or alter advisory traffic. Peers provision voter public keys ahead of time and validate signed bodies locally. The fork witness allows two compromised voters to sign competing proposals, each alongside a different honest voter. An honest peer remembers a valid conflict it observes at its current epoch.
+An adversary can delay, reorder, replay, withhold or alter advisory traffic. Peers provision voter public keys ahead of time and validate signed bodies locally. Two three-vote quorums can share as few as one voter, so one voter signing both proposals can enable conflicting certificates. The formal fork witness exercises a case with two compromised voters. An honest peer remembers a valid conflict it observes at its current epoch.
 
 The demo trusts the initial in-process exchange to supply matching secrets and a common transcript. It also trusts the in-process exchange of genuine offers and the shared boundary schedule. An operational deployment would need an authenticated network handshake, authenticated offers and a durable record of peer and signer state.
 
@@ -67,7 +81,7 @@ python3 -m venv .venv
 ./run_all.sh
 ```
 
-The script starts a loopback broker with an isolated temporary store, runs Python tests, live JetStream checks, Tamarin and ProVerif, then stops the broker and prints a pass/fail summary. For the five-node demo and KEM payload/timing output, run these commands in separate terminals:
+The script starts a loopback broker with an isolated temporary store, runs Python tests, live JetStream checks, the live demo, Tamarin and ProVerif, then stops the broker and prints a pass/fail summary. For the five-node demo and KEM payload/timing output, run these commands in separate terminals:
 
 ```sh
 nats-server -js -a 127.0.0.1 -sd ./jetstream-data
@@ -82,7 +96,7 @@ nats-server -js -a 127.0.0.1 -sd ./jetstream-data
 | Check | Result |
 | --- | --- |
 | Python unit and Hypothesis tests | Generated crash, withhold, replay and competing-certificate schedules kept both peers in agreement. Each emitted key included post-quantum input. Fuzzed advisory, certificate and offer inputs were rejected without state changes. |
-| Live JetStream | Five sessions exercised quorum loss, replay and fork detection with real signatures and KEMs. Two independently fed peers fell back during out-of-order or split delivery, then converged after a hard broker restart and catch-up. [Run output](verification/live-results.txt) |
+| Live JetStream | Five sessions exercised quorum loss, replay and fork detection with real signatures and KEMs. A separate session checked encrypted traffic in both directions through repeated rekeying, split delivery, a hard broker restart, and suspension and recovery. [Run output](verification/live-results.txt) |
 | Tamarin 1.12.0 | 30 maintained lemmas and reachability checks verified across the advisory, boundary and two-compromised-signer theories. [Results](verification/results.txt) |
 | ProVerif 2.05 | Two traffic-key secrecy queries and one injective key-agreement query passed. Four reachability queries exercised normal, lattice swap, classical swap and all-rail fallback. [Results](verification/proverif-results.txt) |
 | Timing checks | The boundary key comparison calls `hmac.compare_digest`. Tests check delegation to the native Ed25519 and SLH-DSA verifiers. The live run samples timings with equal-length inputs. |
@@ -92,6 +106,8 @@ Pushes run bounded Hypothesis tests, ProVerif and the fast Tamarin theories. Man
 ## Scope and limitations
 
 - ProVerif covers **one completed boundary per fresh session**, with at least one selected post-quantum secret assumed private. Disclosure across multiple boundaries that reuse KEM secrets is outside that model.
+- Successive traffic keys depend on the original rail secrets. Disclosure of all three rail secrets and the round inputs exposes traffic keys from that session. Recovering after that disclosure requires a fresh key exchange.
+- An agreed hash swap suspends key derivation. During split delivery, all-rail fallback still depends on HKDF-SHA256.
 - The fork result uses **reachability with two compromised signers** and a composition argument across the certificate, peer-state and boundary theories. It applies when a valid conflicting certificate reaches a peer while the conflicting epoch is current. A late conflict can arrive after a peer has advanced.
 - **Signed epoch and history checks provide replay protection.** JetStream supplies delivery and persistence. A signed replay can have fresh broker metadata, and a hard broker restart can roll back consumer acknowledgments.
 - **Classic McEliece is a dormant backup with a 261 KB payload** exchanged up front. It adds 261,216 bytes to the raw handshake, which totals 263,552 bytes before framing. It is used for swaps that need it and for all-rail fallback.

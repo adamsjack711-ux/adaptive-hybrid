@@ -89,6 +89,25 @@ def test_suspension_keeps_peers_agreed():
     assert all(peer.key is None and not peer.rails and not peer.fallback for peer in pair)
 
 
+def test_gap_in_policy_epochs_skips_signature_verification(monkeypatch):
+    keys = committee()
+    peer = Peer("left", roster(keys), None, session())
+    advisory = Advisory(2, "classical", "swap", 1, ("paper", "quantum", "anomaly"))
+    votes = certificate(advisory, keys)
+    verify_quorum = Mock(wraps=quorum)
+    monkeypatch.setattr("combiner.quorum", verify_quorum)
+    before = snapshot(peer)
+
+    assert not peer.receive(advisory, votes)
+    verify_quorum.assert_not_called()
+    assert snapshot(peer) == before
+
+    predecessor = Advisory(1, "classical", "warn", .75, ("paper", "quantum"))
+    assert peer.receive(predecessor, certificate(predecessor, keys))
+    assert peer.receive(advisory, votes)
+    assert verify_quorum.call_count == 2
+
+
 class DualVerifier:
     """A second Ed25519 key stands in for SLH-DSA in generated schedules."""
 

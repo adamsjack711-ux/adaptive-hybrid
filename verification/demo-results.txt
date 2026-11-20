@@ -1,0 +1,38 @@
+Adaptive Hybrid live demo
+Two in-process peers, five voting identities, one temporary JetStream broker
+ChaCha20-Poly1305 application messages
+liboqs-python faulthandler is disabled
+
+[1/5] Establish the session
+  Initial exchange 263,552 raw bytes, including 261,216 bytes for the McEliece backup
+  Active rails     X25519 + ML-KEM-768
+  Client sent      22f597fc37c4c0e2c8432ee3… (38 bytes of ciphertext and tag)
+  Server decrypted "Before the policy swap"
+
+[2/5] Reject a proposal with two votes
+  Lab signals      paper, quantum, anomaly -> lattice swap (score 1.00, epoch 1)
+  JetStream seq 1  2/5 Ed25519 + SLH-DSA votes rejected by both peers
+
+[3/5] Activate the signed swap
+  JetStream seq 2  3/5 votes accepted, epoch 1 staged on both peers
+  Traffic key      Unchanged while the policy is staged
+  Epoch boundary   Both peers switched using secrets from the initial exchange
+  Active rails     X25519 + Classic-McEliece-348864
+  Client sent      46ed5cdbfa2bf2cde8daf3a2… (37 bytes of ciphertext and tag)
+  Server decrypted "After the policy swap"
+  New key rejected the packet encrypted before the swap
+
+[4/5] Fall back when delivery is split
+  Lab signals      Cleared -> lattice normal (epoch 2)
+  JetStream seq 3  Server subscriber offline (client epoch 2, server epoch 1)
+  Active rails     X25519 + ML-KEM-768 + Classic-McEliece-348864
+  Client sent      5db561681bd0e2cad16b9c71… (40 bytes of ciphertext and tag)
+  Server decrypted "Delivered during the gap"
+
+[5/5] Reconnect and return to the normal rails
+  JetStream seq 3  Server caught up to epoch 2
+  Active rails     X25519 + ML-KEM-768
+  Client sent      3d868c3cc2477e645f9823c1… (40 bytes of ciphertext and tag)
+  Server decrypted "Delivered after recovery"
+
+PASS  Encrypted traffic verified before the swap, after the swap, during fallback, and after recovery.

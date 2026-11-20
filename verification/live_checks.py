@@ -1,85 +1,22 @@
 """Run the fleet against an ephemeral, loopback-only JetStream instance."""
 import asyncio
-from contextlib import AsyncExitStack, ExitStack, contextmanager
+from contextlib import AsyncExitStack, ExitStack
 from dataclasses import replace
-import json
 import multiprocessing
 from pathlib import Path
-import shutil
-import subprocess
 from statistics import median
 import sys
-import tempfile
-import time
 from timeit import repeat
-from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cryptography.exceptions import InvalidSignature
+from cryptography.exceptions import InvalidSignature, InvalidTag
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from combiner import Peer, Subscriber, STREAM, SUBJECTS, boundary, load_nats, publish
 from detector import Advisory, SLH, Voter
 from handshake import RAILS, handshake, keys_match, require_kems
+from verification.broker import broker
 from wire import encode_certificate
-
-
-class Broker:
-    def __init__(self, binary, directory):
-        self.binary, self.directory = binary, Path(directory)
-        self.port, self.proc = -1, None
-
-    def start(self):
-        self.proc = subprocess.Popen([
-            self.binary, "-js", "-sd", str(self.directory / "store"), "-a", "127.0.0.1",
-            "-p", str(self.port), "-ports_file_dir", str(self.directory),
-        ], stderr=subprocess.DEVNULL)
-        ports = self.directory / f"nats-server_{self.proc.pid}.ports"
-        for _ in range(100):
-            if self.proc.poll() is not None:
-                raise RuntimeError("test broker exited during startup")
-            try:
-                url = json.loads(ports.read_text())["nats"][0]
-            except (FileNotFoundError, json.JSONDecodeError):
-                time.sleep(.05)
-                continue
-            self.port = urlsplit(url).port
-            self.url = url
-            return
-        raise TimeoutError("no broker ports file")
-
-    def stop(self, *, crash=False):
-        if self.proc is None or self.proc.poll() is not None:
-            return
-        if crash:
-            self.proc.kill()
-        else:
-            self.proc.terminate()
-        try:
-            self.proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            self.proc.kill()
-            self.proc.wait()
-
-    def restart(self):
-        self.stop(crash=True)
-        self.start()
-
-
-@contextmanager
-def broker():
-    binary = shutil.which("nats-server")
-    if binary is None:
-        local = Path.home() / "go/bin/nats-server"
-        if not local.is_file():
-            raise FileNotFoundError("Install nats-server and add it to PATH")
-        binary = str(local)
-    with tempfile.TemporaryDirectory(prefix="adaptive-hybrid-") as tmp:
-        instance = Broker(binary, tmp)
-        try:
-            instance.start()
-            yield instance
-        finally:
-            instance.stop()
 
 
 def signer_worker(pipe):
@@ -134,9 +71,24 @@ async def exercise(url, stack, pipe, worker, oqs):
 
         first = Advisory(1, "lattice", "watch", .4, ("paper",))
         first_votes = [v.vote(first) for v in voters[:3]]
-        await publish(js, first, first_votes, nodes)
         warn = replace(first, epoch=2, tier="warn", score=.64, sources=("paper", "quantum"))
-        await publish(js, warn, [v.vote(warn) for v in voters[:3]], nodes)
+        warn_votes = [v.vote(warn) for v in voters[:3]]
+        name, first_ed, first_slh = first_votes[2]
+        _, later_ed, later_slh = warn_votes[2]
+        outsider = Voter("outsider", oqs, stack)
+        invalid_shares = (
+            ("Ed25519 for a different advisory", (name, later_ed, first_slh)),
+            ("SLH-DSA for a different advisory", (name, first_ed, later_slh)),
+            ("untrusted voter", outsider.vote(first)),
+        )
+        before = snapshot()
+        for reason, share in invalid_shares:
+            await publish(js, first, [*first_votes[:2], share], nodes)
+            assert snapshot() == before, f"peer state changed after a share from {reason}"
+        print("PASS mixed-body signatures and an untrusted voter left peer state unchanged")
+
+        await publish(js, first, first_votes, nodes)
+        await publish(js, warn, warn_votes, nodes)
         activate(2, RAILS[:2])
         swap = replace(warn, epoch=3, tier="swap", score=.85)
         activate(3, RAILS)
@@ -209,6 +161,37 @@ async def chaos(instance):
         verifier = stack.enter_context(oqs.Signature(SLH))
         pair = [Peer(name, roster, verifier, session)
                 for name, session in zip(("left", "right"), handshake())]
+        used_keys, previous_packets = set(), []
+
+        def check_traffic(rails, *, fallback=False):
+            assert all(peer.rails == rails and peer.fallback == fallback for peer in pair)
+            if not rails:
+                assert all(peer.key is None for peer in pair)
+                return
+
+            key = pair[0].key
+            assert key is not None and keys_match(key, pair[1].key)
+            assert key not in used_keys, f"reused traffic key at round {pair[0].round}"
+            used_keys.add(key)
+
+            for direction, nonce, ciphertext in previous_packets:
+                receiver = pair[1 - direction]
+                try:
+                    ChaCha20Poly1305(receiver.key).decrypt(nonce, ciphertext, None)
+                except InvalidTag:
+                    pass
+                else:
+                    raise AssertionError(f"prior packet accepted at round {receiver.round}")
+
+            for direction, sender in enumerate(pair):
+                receiver = pair[1 - direction]
+                message = f"round {sender.round} from {sender.name}".encode()
+                nonce = (2 * sender.round + direction).to_bytes(12, "big")
+                ciphertext = ChaCha20Poly1305(sender.key).encrypt(nonce, message, None)
+                assert ChaCha20Poly1305(receiver.key).decrypt(nonce, ciphertext, None) == message
+                previous_packets.append((direction, nonce, ciphertext))
+
+        check_traffic(RAILS[:2])
         async with AsyncExitStack() as cleanup:
             async def publisher():
                 nc = await nats.connect(instance.url, allow_reconnect=False)
@@ -229,23 +212,23 @@ async def chaos(instance):
             await publish(js, later, later_votes, nodes)
             assert all(peer.epoch == 0 for peer in pair)
             boundary(pair, 2)
-            assert all(peer.fallback and peer.rails == RAILS for peer in pair)
+            check_traffic(RAILS, fallback=True)
             print("PASS out-of-order epoch 2: rejected over the gap, both peers fell back")
 
             first_seq = await publish(js, first, first_votes, [left])
             assert (pair[0].epoch, pair[1].epoch) == (1, 0)
             boundary(pair, 1)
-            assert all(peer.fallback and peer.rails == RAILS for peer in pair)
+            check_traffic(RAILS, fallback=True)
             await asyncio.sleep(.05)
             await right.through(first_seq)
             boundary(pair, 1)
-            assert all(not peer.fallback and peer.rails == RAILS[:2] for peer in pair)
+            check_traffic(RAILS[:2])
             print("PASS delayed peer: fallback during split delivery, active keys after catch-up")
 
             second_seq = await publish(js, later, later_votes, [left])
             assert (pair[0].epoch, pair[1].epoch) == (2, 1)
             boundary(pair, 2)
-            assert all(peer.fallback for peer in pair)
+            check_traffic(RAILS, fallback=True)
             pid = instance.proc.pid
             instance.restart()
             assert instance.proc.pid != pid
@@ -265,9 +248,8 @@ async def chaos(instance):
                       f"ack pending {consumer.num_ack_pending}")
             await right.through(second_seq)
             boundary(pair, 2)
-            assert keys_match(pair[0].key, pair[1].key) and pair[0].key is not None
-            assert all(peer.epoch == 2 and not peer.fallback and peer.rails == ("classical", "code")
-                       for peer in pair)
+            assert all(peer.epoch == 2 for peer in pair)
+            check_traffic(("classical", "code"))
             print("PASS hard broker restart mid-epoch: pending traffic recovered, peers converged on epoch 2")
 
             before = [(peer.offer(), peer.key, dict(peer.states)) for peer in pair]
@@ -283,7 +265,34 @@ async def chaos(instance):
             print("PASS duplicate and malformed publications after restart: policy and keys preserved")
             await publish(js, successor, successor_votes, nodes)
             boundary(pair, 3)
-            assert all(peer.epoch == 3 and not peer.fallback and peer.rails == RAILS[:2] for peer in pair)
+            assert all(peer.epoch == 3 for peer in pair)
+            check_traffic(RAILS[:2])
+            boundary(pair, 3)
+            check_traffic(RAILS[:2])
+            print("PASS repeated boundary at epoch 3: same rails, fresh key")
+
+            post_quantum = ("lattice", "code")
+            transitions = (
+                ("classical", "swap", post_quantum),
+                ("lattice", "swap", ()),
+                ("lattice", "normal", post_quantum),
+                ("hash", "swap", ()),
+                ("hash", "normal", post_quantum),
+            )
+            for epoch, (assumption, tier, rails) in enumerate(transitions, start=4):
+                swap = tier == "swap"
+                advisory = Advisory(epoch, assumption, tier, 1.0 if swap else 0.0,
+                                    ("paper", "quantum", "anomaly") if swap else ())
+                keys_before_publish = tuple(peer.key for peer in pair)
+                await publish(js, advisory, [voter.vote(advisory) for voter in voters], nodes)
+                assert all(peer.epoch == epoch for peer in pair)
+                assert tuple(peer.key for peer in pair) == keys_before_publish
+                boundary(pair, epoch)
+                check_traffic(rails)
+            print("PASS classical swap: both post-quantum rails, suspension and recovery "
+                  "for low rail count and hash swap")
+            print(f"PASS {len(used_keys)} distinct traffic keys and {len(previous_packets)} packets "
+                  "verified in both directions, with prior packets rejected after each rotation")
 
 
 def timing_check():
