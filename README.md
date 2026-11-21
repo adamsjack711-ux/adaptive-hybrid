@@ -63,6 +63,15 @@ Two independent processes exchange all three KEM rails and boundary offers over 
 
 The optional durable subscriber records its JetStream cursor and up to 32 deferred stream sequence numbers before acknowledging delivery. A signed future epoch is held by sequence number; when the missing epoch arrives, the subscriber fetches the retained certificate from JetStream and verifies it before advancing policy. Callers using `Subscriber.boundary()` require a complete policy history before deriving a new traffic key. If retained history disappears, recovery stops with an error. The five-node loopback lab exercises two out-of-order gaps, offline nodes, two hard broker restarts, fresh KEM sessions, 12 signed epochs and 100 encrypted packets. It does not provide a distributed production deployment. [Run output](verification/recovery-results.txt)
 
+For a repeatable load run and a retained-history loss check:
+
+```sh
+.venv/bin/python -m verification.recovery_load --nodes 20 --epochs 100 --seed 17
+.venv/bin/python -m verification.recovery_loss
+```
+
+The load runner publishes real SLH-DSA-certified advisories to a temporary JetStream broker and encrypts and decrypts test packets at each completed boundary. Every gap withholds one quarter of subscribers; every second gap hard-restarts the broker and creates fresh peer KEM sessions. Its reported time begins after signer and initial peer setup, so the delivery rate is for this loopback workload, not end-to-end deployment capacity. The loss check deletes a deferred certificate from the temporary stream and confirms that restored peers cannot derive a new traffic key. [Measurements and limits](verification/recovery-load-results.md)
+
 ## Architecture
 
 The handshake establishes three independent secrets. Normal operation combines X25519 and ML-KEM-768 in HKDF. A certified lattice swap replaces ML-KEM with Classic McEliece-348864. A classical swap uses both post-quantum rails.
@@ -145,6 +154,7 @@ nats-server -js -a 127.0.0.1 -sd ./jetstream-data
 | Python unit and Hypothesis tests | Generated crash, withhold, replay and competing-certificate schedules kept both peers in agreement. Each emitted key included post-quantum input. Fuzzed advisory, certificate and offer inputs were rejected without state changes. |
 | Live JetStream | Five sessions exercised quorum loss, replay and fork detection with real signatures and KEMs. A separate session checked encrypted traffic in both directions through repeated rekeying, split delivery, a hard broker restart, and suspension and recovery. [Run output](verification/live-results.txt) |
 | Recovery stress | Five durable subscribers recovered two missing-epoch gaps across offline periods and two hard broker restarts, then exchanged 100 encrypted packets across 12 signed epochs. [Run output](verification/recovery-results.txt) |
+| Extended recovery load | The 5/30, 20/100 and 40/120 node/epoch runs recovered 4, 14 and 23 gaps respectively, with no key reuse or stalled cursor. The peak run hard-restarted its broker 11 times and exchanged 7,760 encrypted packets; its slowest recovery step took 12.5 seconds. Deleted stream history blocked recovery and key activation. [Load results](verification/recovery-load-peak.txt), [loss result](verification/recovery-loss-results.txt) |
 | Tamarin 1.12.0 | 30 maintained lemmas and reachability checks verified across the advisory, boundary and two-compromised-signer theories. [Results](verification/results.txt) |
 | ProVerif 2.05 | The original one-boundary model and a four-boundary fixed schedule each passed two traffic-key secrecy queries and one injective key-agreement query. The repeated model also checked distinct keys across boundaries. Each reached normal, lattice swap, classical swap and all-rail fallback. The repeated model reuses the same rail secrets and discloses X25519 throughout. [Results](verification/proverif-results.txt), [repeated results](verification/repeated-results.txt) |
 | Timing checks | The boundary key comparison calls `hmac.compare_digest`. Tests check delegation to the native Ed25519 and SLH-DSA verifiers. The live run samples timings with equal-length inputs. |
@@ -163,6 +173,7 @@ Pushes run bounded Hypothesis tests, ProVerif and the fast Tamarin theories. Man
 - The generated schedules use a second Ed25519 key to exercise the dual-signature logic deterministically. The live tests cover actual SLH-DSA and the actual KEMs. The test scenarios retain the in-memory peers and voters across broker restart.
 - The authenticated restart lab persists signer keys and peer policy in owner-only files, then performs a fresh KEM exchange. It does not resume an interrupted traffic session, protect keys from a compromised host, or authenticate a production boundary scheduler.
 - The recovery stress uses retained JetStream history and a local, single-writer cursor file. It fails closed if a deferred sequence is unavailable; it does not recover from stream data loss or protect against broker or host compromise. Strict boundary gating is opt-in through `Subscriber.boundary()`; the original fleet demonstration still permits all-rail fallback during split delivery.
+- Load results come from one laptop, one loopback broker, and one subscriber process. They are not a distributed capacity claim or a multi-host latency measurement. The runner bounds nodes, epochs and exercise time, but certificate signing and initial KEM setup happen before its timed interval.
 
 ## Future work
 
