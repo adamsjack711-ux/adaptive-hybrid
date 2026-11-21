@@ -214,3 +214,27 @@ def test_subscriber_retries_after_cursor_write_failure(tmp_path, monkeypatch):
         monkeypatch.setattr(subscriber.state_file, "save", original_save)
         asyncio.run(subscriber.through(1))
         assert subscriber.cursor == 1 and acknowledgments == [1]
+
+
+def test_subscriber_overflow_cursor_schema_and_legacy_state(tmp_path):
+    peer = Peer("left", {}, None, fresh_session(), tmp_path / "peer.state")
+    path = tmp_path / "cursor.state"
+    subscriber = Subscriber([peer], "cursor-test", 1, "nats://unused", path)
+    record = subscriber.state_file.load()
+    record.pop("overflow_next")
+    subscriber.state_file.save(record)
+    assert Subscriber([peer], "cursor-test", 1, "nats://unused", path).overflow_next is None
+
+    record["cursor"] = 2
+    record["deferred"] = [1]
+    record["overflow_next"] = 2
+    subscriber.state_file.save(record)
+    restored = Subscriber([peer], "cursor-test", 1, "nats://unused", path)
+    assert restored.cursor == 2 and restored.deferred == [1] and restored.overflow_next == 2
+    assert not restored.ready_for(0)
+
+    for invalid in (True, 0, 3, 1):
+        record["overflow_next"] = invalid
+        subscriber.state_file.save(record)
+        with pytest.raises(ValueError, match="schema"):
+            Subscriber([peer], "cursor-test", 1, "nats://unused", path)

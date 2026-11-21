@@ -192,13 +192,15 @@ class Subscriber:
         self.cursor, self.nc = start - 1, None
         self.state_file = StateFile(state_path) if state_path is not None else None
         self.deferred = []
+        self.overflow_next = None
         if self.state_file is not None:
             record = self.state_file.load()
             if record is None:
                 self._persist()
             else:
-                if (set(record) != {"version", "kind", "stream", "durable", "start",
-                                    "cursor", "deferred"}
+                fields = {"version", "kind", "stream", "durable", "start", "cursor", "deferred"}
+                overflow_next = record.get("overflow_next")
+                if (set(record) not in (fields, fields | {"overflow_next"})
                         or record["version"] != 1 or record["kind"] != "subscriber"
                         or record["stream"] != STREAM or record["durable"] != durable
                         or record["start"] != start or type(record["cursor"]) is not int
@@ -207,24 +209,39 @@ class Subscriber:
                         or len(record["deferred"]) > self.MAX_DEFERRED
                         or any(type(seq) is not int or not start <= seq <= record["cursor"]
                                for seq in record["deferred"])
-                        or record["deferred"] != sorted(set(record["deferred"]))):
+                        or record["deferred"] != sorted(set(record["deferred"]))
+                        or (overflow_next is not None and
+                            (type(overflow_next) is not int
+                             or not start <= overflow_next <= record["cursor"]
+                             or (record["deferred"] and record["deferred"][-1] >= overflow_next)))):
                     raise ValueError("subscriber state does not match stream or schema")
                 self.cursor, self.deferred = record["cursor"], record["deferred"]
+                self.overflow_next = overflow_next
 
     def _persist(self):
         if self.state_file is not None:
             self.state_file.save({"version": 1, "kind": "subscriber", "stream": STREAM,
                                   "durable": self.durable, "start": self.start,
-                                  "cursor": self.cursor, "deferred": self.deferred})
+                                  "cursor": self.cursor, "deferred": self.deferred,
+                                  "overflow_next": self.overflow_next})
 
     def ready_for(self, epoch):
         """A strict caller may withhold a new traffic boundary until policy catches up."""
-        return not self.deferred and all(peer.epoch == epoch for peer in self.pair)
+        return (not self.deferred and self.overflow_next is None
+                and all(peer.epoch == epoch for peer in self.pair))
 
     def boundary(self, epoch):
         if not self.ready_for(epoch):
             raise ValueError(f"{self.durable} has unresolved policy history at epoch {epoch}")
         boundary(self.pair, epoch)
+
+    def activate(self, remote_offer, epoch, round_id):
+        """Gate one endpoint's authenticated boundary on complete policy history."""
+        if len(self.pair) != 1:
+            raise ValueError("single-endpoint activation requires one peer")
+        if not self.ready_for(epoch):
+            raise ValueError(f"{self.durable} has unresolved policy history at epoch {epoch}")
+        return self.pair[0].activate(remote_offer, epoch, round_id)
 
     async def connect(self):
         nats, api = load_nats()
@@ -255,7 +272,7 @@ class Subscriber:
             logging.info("%s delivery seq=%d age=%.3fs", self.durable, seq, age)
             if seq > self.cursor + 1:
                 raise RuntimeError(f"{self.durable} lost stream history before {seq}")
-            previous = self.cursor, list(self.deferred)
+            previous = self.cursor, list(self.deferred), self.overflow_next
             if seq <= self.cursor or age < -5 or (self.state_file is None and age > 3600):
                 logging.warning("%s rejected duplicate sequence or stale broker timestamp", self.durable)
             else:
@@ -264,7 +281,7 @@ class Subscriber:
             try:
                 self._persist()
             except Exception:
-                self.cursor, self.deferred = previous
+                self.cursor, self.deferred, self.overflow_next = previous
                 raise
             if self.state_file is not None:
                 await self._drain_deferred()
@@ -288,12 +305,16 @@ class Subscriber:
             else:
                 peer.receive(advisory, votes)
         if deferred:
-            if len(self.deferred) >= self.MAX_DEFERRED:
-                raise RuntimeError(f"{self.durable} deferred certificate limit reached")
-            self.deferred.append(seq)
+            if self.overflow_next is not None or len(self.deferred) >= self.MAX_DEFERRED:
+                # The broker retains the rest of the backlog. Persist its first
+                # sequence so local state stays bounded and later replay is exact.
+                if self.overflow_next is None:
+                    self.overflow_next = seq
+            else:
+                self.deferred.append(seq)
 
     async def _drain_deferred(self):
-        if not self.deferred:
+        if not self.deferred and self.overflow_next is None:
             return
         js = self.nc.jetstream()
         while True:
@@ -313,6 +334,31 @@ class Subscriber:
                 except Exception:
                     self.deferred.append(seq)
                     self.deferred.sort()
+                    raise
+                progress = True
+            if self.overflow_next is not None:
+                seq = self.overflow_next
+                raw = await js.get_msg(STREAM, seq=seq)
+                if raw.seq != seq or raw.data is None or raw.subject not in SUBJECTS:
+                    raise RuntimeError(f"{self.durable} cannot replay stream sequence {seq}")
+                try:
+                    advisory, votes = decode_certificate(raw.data, raw.subject)
+                except ValueError:
+                    advisory = None
+                if advisory is not None:
+                    if any(advisory.epoch > peer.epoch + 1
+                           and quorum(advisory, votes, peer.roster, peer.verifier)
+                           for peer in self.pair):
+                        if not progress:
+                            return
+                        continue
+                    for peer in self.pair:
+                        peer.receive(advisory, votes)
+                self.overflow_next = seq + 1 if seq < self.cursor else None
+                try:
+                    self._persist()
+                except Exception:
+                    self.overflow_next = seq
                     raise
                 progress = True
             if not progress:

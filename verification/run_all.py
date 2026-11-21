@@ -40,6 +40,12 @@ def main():
             sys.executable, "-u", "-m", "verification.durable_session"))
         check("Missing-epoch recovery stress", lambda: command(
             sys.executable, "-u", "-m", "verification.recovery_stress"))
+        check("Lost-history fail-closed recovery", lambda: command(
+            sys.executable, "-u", "-m", "verification.recovery_loss"))
+        check("Adversarial recovery and overflow replay", lambda: command(
+            sys.executable, "-u", "-m", "verification.adversarial_recovery"))
+        check("Two-process network recovery", lambda: command(
+            sys.executable, "-u", "-m", "verification.recovery_network"))
         check("Tamarin", lambda: command("./verification/verify.sh"))
         check("ProVerif", lambda: command("./verification/crosscheck.sh"))
 

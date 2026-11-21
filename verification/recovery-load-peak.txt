@@ -1,0 +1,2 @@
+liboqs-python faulthandler is disabled
+PASS {"boundaries": 97, "broker_restarts": 11, "deliveries_per_s": 30.4, "elapsed_s": 157.696, "encrypted_packets": 7760, "epochs": 120, "gap_every": 5, "gap_recoveries": 23, "nodes": 40, "recovery_max_ms": 12491.6, "restart_every_gaps": 2, "seed": 42, "signed_messages": 120, "step_median_ms": 380.0, "step_p95_ms": 10374.8}

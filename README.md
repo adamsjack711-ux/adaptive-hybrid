@@ -61,7 +61,28 @@ Two independent processes exchange all three KEM rails and boundary offers over 
 .venv/bin/python -m verification.recovery_stress
 ```
 
-The optional durable subscriber records its JetStream cursor and up to 32 deferred stream sequence numbers before acknowledging delivery. A signed future epoch is held by sequence number; when the missing epoch arrives, the subscriber fetches the retained certificate from JetStream and verifies it before advancing policy. Callers using `Subscriber.boundary()` require a complete policy history before deriving a new traffic key. If retained history disappears, recovery stops with an error. The five-node loopback lab exercises two out-of-order gaps, offline nodes, two hard broker restarts, fresh KEM sessions, 12 signed epochs and 100 encrypted packets. It does not provide a distributed production deployment. [Run output](verification/recovery-results.txt)
+The optional durable subscriber records its JetStream cursor and up to 32 deferred stream sequence numbers before acknowledging delivery. When that list fills, it persists the first overflow sequence for later replay from retained JetStream history. A signed future epoch stays pending until missing epochs arrive; the subscriber then fetches and verifies retained certificates before advancing policy. Callers using `Subscriber.boundary()` require a complete policy history before deriving a new traffic key. Single-endpoint callers can use `Subscriber.activate()` with an authenticated remote offer. If retained history disappears, recovery stops with an error. The five-node loopback lab exercises two out-of-order gaps, offline nodes, two hard broker restarts, fresh KEM sessions, 12 signed epochs and 100 encrypted packets. It does not provide a distributed production deployment. [Run output](verification/recovery-results.txt)
+
+For a separate-process sensor scenario using that recovery path:
+
+```sh
+.venv/bin/python -m verification.recovery_network
+```
+
+The client and server each own a durable subscriber and policy file. They exchange real three-rail KEM material and encrypted sensor messages over mutual TLS. A signed lattice advisory for epoch 3 arrives before epoch 2, so both refuse the new traffic boundary. After a hard broker restart, new endpoint processes restore their cursors, fetch the missing epoch, exchange authenticated boundary offers, and resume encrypted traffic. The CA, identities, broker and endpoints are disposable loopback lab components. [Run output](verification/recovery-network-results.txt)
+
+For repeatable load, retained-history loss, and adversarial recovery checks:
+
+```sh
+.venv/bin/python -m verification.recovery_load --nodes 20 --epochs 100 --seed 17
+.venv/bin/python -m verification.recovery_loss
+.venv/bin/python -m verification.adversarial_recovery
+.venv/bin/python -m verification.adversarial_recovery --hostile-rounds 1024 --future-certificates 256 --timeout 600
+```
+
+The load runner publishes real SLH-DSA-certified advisories to a temporary JetStream broker and encrypts and decrypts test packets at each completed boundary. Every gap withholds one quarter of subscribers; every second gap hard-restarts the broker and creates fresh peer KEM sessions. Its reported time begins after signer and initial peer setup, so the delivery rate is for this loopback workload, not end-to-end deployment capacity. The loss check deletes a deferred certificate from the temporary stream and confirms that restored peers cannot derive a new traffic key. [Measurements and limits](verification/recovery-load-results.md)
+
+The adversarial recovery check rejects malformed, tampered, and oversized publications, then withholds an epoch while delivering many valid future certificates. The larger run processed 3,072 hostile publications and recovered 256 future certificates across a hard broker restart. A separate check deleted overflow history and confirmed that new key activation stopped. [Measurements and threat conditions](verification/adversarial-recovery-results.md)
 
 ## Architecture
 
@@ -101,7 +122,7 @@ The message parser rejects duplicate fields, unknown fields and mismatched subje
 
 An adversary can delay, reorder, replay, withhold or alter advisory traffic. Peers provision voter public keys ahead of time and validate signed bodies locally. Two three-vote quorums can share as few as one voter, so one voter signing both proposals can enable conflicting certificates. The formal fork witness exercises a case with two compromised voters. An honest peer remembers a valid conflict it observes at its current epoch.
 
-The fleet demo trusts its initial in-process exchange to supply matching secrets and a common transcript. The separate-process lab uses mutual TLS for that exchange and for genuine offers, with a common boundary schedule supplied by the lab harness. An operational deployment still needs provisioned identities, protected persistent keys, a durable delivery cursor, and a recovery protocol for missing epochs.
+The fleet demo trusts its initial in-process exchange to supply matching secrets and a common transcript. The separate-process lab uses mutual TLS for that exchange and for genuine offers, with a common boundary schedule supplied by the lab harness. The network recovery lab adds per-endpoint durable cursors and retained-history replay. An operational deployment still needs provisioned identities, protected persistent keys, authenticated broker access, and a multi-host recovery plan for lost stream history.
 
 ## Run locally
 
@@ -128,7 +149,7 @@ python3 -m venv .venv
 ./run_all.sh
 ```
 
-The script starts a loopback broker with an isolated temporary store, runs Python tests, live JetStream checks, the live demo, a smoke test for all four network examples, Tamarin and ProVerif, then stops the broker and prints a pass/fail summary. Run the next two commands in separate terminals for the five-node demo and KEM measurements.
+The script starts a loopback broker with an isolated temporary store, runs Python tests, live JetStream checks, the live demo, a smoke test for all four network examples, authenticated session and recovery checks, adversarial overflow replay, Tamarin and ProVerif, then stops the broker and prints a pass/fail summary. Run the next two commands in separate terminals for the five-node demo and KEM measurements.
 
 ```sh
 nats-server -js -a 127.0.0.1 -sd ./jetstream-data
@@ -145,6 +166,9 @@ nats-server -js -a 127.0.0.1 -sd ./jetstream-data
 | Python unit and Hypothesis tests | Generated crash, withhold, replay and competing-certificate schedules kept both peers in agreement. Each emitted key included post-quantum input. Fuzzed advisory, certificate and offer inputs were rejected without state changes. |
 | Live JetStream | Five sessions exercised quorum loss, replay and fork detection with real signatures and KEMs. A separate session checked encrypted traffic in both directions through repeated rekeying, split delivery, a hard broker restart, and suspension and recovery. [Run output](verification/live-results.txt) |
 | Recovery stress | Five durable subscribers recovered two missing-epoch gaps across offline periods and two hard broker restarts, then exchanged 100 encrypted packets across 12 signed epochs. [Run output](verification/recovery-results.txt) |
+| Extended recovery load | The 5/30, 20/100, 40/120 and 50/160 node/epoch runs recovered 4, 14, 23 and 31 gaps respectively, with no key reuse or stalled cursor. The largest run hard-restarted its broker 15 times and checked 12,900 encrypted packets; its slowest recovery step took 16.88 seconds. Deleted stream history blocked recovery and key activation. [Load results](verification/recovery-load-results.md), [loss result](verification/recovery-loss-results.txt) |
+| Adversarial recovery | A 3,072-message malformed, forged and oversized publication flood did not advance policy. After the overflow fix, 256 valid future certificates recovered after a missing epoch and hard broker restart; deleted overflow history blocked key activation. [Results](verification/adversarial-recovery-results.md) |
+| Two-process network recovery | Separate mutually authenticated processes blocked a boundary while epoch 2 was missing, then recovered signed lattice epochs from JetStream after broker and endpoint restarts and exchanged encrypted sensor packets. [Run output](verification/recovery-network-results.txt) |
 | Tamarin 1.12.0 | 30 maintained lemmas and reachability checks verified across the advisory, boundary and two-compromised-signer theories. [Results](verification/results.txt) |
 | ProVerif 2.05 | The original one-boundary model and a four-boundary fixed schedule each passed two traffic-key secrecy queries and one injective key-agreement query. The repeated model also checked distinct keys across boundaries. Each reached normal, lattice swap, classical swap and all-rail fallback. The repeated model reuses the same rail secrets and discloses X25519 throughout. [Results](verification/proverif-results.txt), [repeated results](verification/repeated-results.txt) |
 | Timing checks | The boundary key comparison calls `hmac.compare_digest`. Tests check delegation to the native Ed25519 and SLH-DSA verifiers. The live run samples timings with equal-length inputs. |
@@ -163,6 +187,7 @@ Pushes run bounded Hypothesis tests, ProVerif and the fast Tamarin theories. Man
 - The generated schedules use a second Ed25519 key to exercise the dual-signature logic deterministically. The live tests cover actual SLH-DSA and the actual KEMs. The test scenarios retain the in-memory peers and voters across broker restart.
 - The authenticated restart lab persists signer keys and peer policy in owner-only files, then performs a fresh KEM exchange. It does not resume an interrupted traffic session, protect keys from a compromised host, or authenticate a production boundary scheduler.
 - The recovery stress uses retained JetStream history and a local, single-writer cursor file. It fails closed if a deferred sequence is unavailable; it does not recover from stream data loss or protect against broker or host compromise. Strict boundary gating is opt-in through `Subscriber.boundary()`; the original fleet demonstration still permits all-rail fallback during split delivery.
+- Load results come from one laptop, one loopback broker, and one subscriber process. They are not a distributed capacity claim or a multi-host latency measurement. The runner bounds nodes, epochs and exercise time, but certificate signing and initial KEM setup happen before its timed interval.
 
 ## Future work
 

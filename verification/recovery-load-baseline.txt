@@ -1,0 +1,16 @@
+liboqs-python faulthandler is disabled
+WARNING:root:recovery-3 rejected duplicate sequence or stale broker timestamp
+WARNING:root:recovery-1 rejected duplicate sequence or stale broker timestamp
+WARNING:root:recovery-0 rejected duplicate sequence or stale broker timestamp
+WARNING:root:recovery-2 rejected duplicate sequence or stale broker timestamp
+WARNING:root:recovery-4 rejected duplicate sequence or stale broker timestamp
+WARNING:root:recovery-4 rejected duplicate sequence or stale broker timestamp
+WARNING:root:recovery-0 rejected duplicate sequence or stale broker timestamp
+WARNING:root:recovery-2 rejected duplicate sequence or stale broker timestamp
+WARNING:root:recovery-1 rejected duplicate sequence or stale broker timestamp
+WARNING:root:recovery-3 rejected duplicate sequence or stale broker timestamp
+WARNING:root:recovery-3 rejected duplicate sequence or stale broker timestamp
+WARNING:root:recovery-0 rejected duplicate sequence or stale broker timestamp
+WARNING:root:recovery-1 rejected duplicate sequence or stale broker timestamp
+WARNING:root:recovery-3 rejected duplicate sequence or stale broker timestamp
+PASS {"boundaries": 26, "broker_restarts": 2, "deliveries_per_s": 35.5, "elapsed_s": 4.222, "encrypted_packets": 260, "epochs": 30, "gap_every": 7, "gap_recoveries": 4, "nodes": 5, "recovery_max_ms": 1505.6, "restart_every_gaps": 2, "seed": 1, "signed_messages": 30, "step_median_ms": 49.1, "step_p95_ms": 1336.1}

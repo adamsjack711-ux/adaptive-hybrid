@@ -18,9 +18,9 @@ COUNT = 5
 EPOCHS = 12
 
 
-def make_nodes(directory, roster, verifier, url):
+def make_nodes(directory, roster, verifier, url, count=COUNT):
     nodes = []
-    for i in range(COUNT):
+    for i in range(count):
         pair = [Peer(f"node-{i}/{side}", roster, verifier, session,
                      directory / f"node-{i}-{side}.state")
                 for side, session in zip(("client", "server"), handshake())]
@@ -30,15 +30,17 @@ def make_nodes(directory, roster, verifier, url):
 
 
 def traffic(nodes, epoch, previous):
+    count = len(nodes)
     for i, node in enumerate(nodes):
         node.boundary(epoch)
         left, right = node.pair
         assert left.key is not None and keys_match(left.key, right.key)
-        assert left.key != previous.get(i), f"node {i} reused a traffic key"
-        previous[i] = left.key
+        seen = previous.setdefault(i, set())
+        assert left.key not in seen, f"node {i} reused a traffic key"
+        seen.add(left.key)
         for direction, sender in enumerate(node.pair):
             receiver = node.pair[1 - direction]
-            nonce = (epoch * COUNT * 2 + i * 2 + direction).to_bytes(12, "big")
+            nonce = (epoch * count * 2 + i * 2 + direction).to_bytes(12, "big")
             plaintext = f"node {i} epoch {epoch} direction {direction}".encode()
             encrypted = ChaCha20Poly1305(sender.key).encrypt(nonce, plaintext, None)
             assert ChaCha20Poly1305(receiver.key).decrypt(nonce, encrypted, None) == plaintext
