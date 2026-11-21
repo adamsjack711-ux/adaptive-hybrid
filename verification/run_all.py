@@ -38,6 +38,8 @@ def main():
                                                    "--runs", "1"))
         check("Authenticated durable session", lambda: command(
             sys.executable, "-u", "-m", "verification.durable_session"))
+        check("Missing-epoch recovery stress", lambda: command(
+            sys.executable, "-u", "-m", "verification.recovery_stress"))
         check("Tamarin", lambda: command("./verification/verify.sh"))
         check("ProVerif", lambda: command("./verification/crosscheck.sh"))
 

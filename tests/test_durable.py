@@ -1,13 +1,17 @@
 import hashlib
 import hmac
 import os
+import asyncio
 from contextlib import ExitStack
+from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
-from combiner import Peer, boundary
+from combiner import Peer, Subscriber, boundary
 from detector import Advisory, Voter
 from handshake import RAILS, derive
+from wire import encode_certificate
 
 
 class LabSignature:
@@ -166,3 +170,47 @@ def test_failed_durable_write_does_not_issue_vote_or_stage_policy(tmp_path, monk
         assert peer.epoch == 0 and peer.last_digest is None and peer.states["classical"] == "normal"
         monkeypatch.setattr(peer.state_file, "save", original_save)
         assert peer.receive(advisory, votes)
+
+
+def test_subscriber_retries_after_cursor_write_failure(tmp_path, monkeypatch):
+    with ExitStack() as stack:
+        voters = [Voter(str(i), LabOQS, stack) for i in range(3)]
+        roster = {v.name: v.public for v in voters}
+        peer = Peer("left", roster, None, fresh_session(), tmp_path / "peer.state")
+        advisory = Advisory(1, "classical", "watch", .4, ("paper",))
+        data = encode_certificate(advisory, signed(advisory, voters))
+        subscriber = Subscriber([peer], "cursor-test", 1, "nats://unused",
+                                tmp_path / "cursor.state")
+        acknowledgments = []
+
+        class Message:
+            metadata = SimpleNamespace(sequence=SimpleNamespace(stream=1),
+                                       timestamp=datetime.now(timezone.utc))
+            subject = "advisories.classical"
+
+            async def ack_sync(self):
+                acknowledgments.append(1)
+
+        message = Message()
+        message.data = data
+
+        class Subscription:
+            async def fetch(self, count, timeout):
+                return [message]
+
+        subscriber.sub = Subscription()
+        original_save = subscriber.state_file.save
+
+        def disk_full(_):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(subscriber.state_file, "save", disk_full)
+        with pytest.raises(OSError, match="disk full"):
+            asyncio.run(subscriber.through(1))
+        assert peer.epoch == 1 and subscriber.cursor == 0 and not acknowledgments
+        assert Subscriber([peer], "cursor-test", 1, "nats://unused",
+                          tmp_path / "cursor.state").cursor == 0
+
+        monkeypatch.setattr(subscriber.state_file, "save", original_save)
+        asyncio.run(subscriber.through(1))
+        assert subscriber.cursor == 1 and acknowledgments == [1]

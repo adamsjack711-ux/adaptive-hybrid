@@ -185,9 +185,46 @@ def load_nats():
 
 class Subscriber:
     """One durable pull consumer and one real NATS connection per fleet node."""
-    def __init__(self, pair, durable, start, url):
+    MAX_DEFERRED = 32
+
+    def __init__(self, pair, durable, start, url, state_path=None):
         self.pair, self.durable, self.start, self.url = pair, durable, start, url
         self.cursor, self.nc = start - 1, None
+        self.state_file = StateFile(state_path) if state_path is not None else None
+        self.deferred = []
+        if self.state_file is not None:
+            record = self.state_file.load()
+            if record is None:
+                self._persist()
+            else:
+                if (set(record) != {"version", "kind", "stream", "durable", "start",
+                                    "cursor", "deferred"}
+                        or record["version"] != 1 or record["kind"] != "subscriber"
+                        or record["stream"] != STREAM or record["durable"] != durable
+                        or record["start"] != start or type(record["cursor"]) is not int
+                        or record["cursor"] < start - 1
+                        or not isinstance(record["deferred"], list)
+                        or len(record["deferred"]) > self.MAX_DEFERRED
+                        or any(type(seq) is not int or not start <= seq <= record["cursor"]
+                               for seq in record["deferred"])
+                        or record["deferred"] != sorted(set(record["deferred"]))):
+                    raise ValueError("subscriber state does not match stream or schema")
+                self.cursor, self.deferred = record["cursor"], record["deferred"]
+
+    def _persist(self):
+        if self.state_file is not None:
+            self.state_file.save({"version": 1, "kind": "subscriber", "stream": STREAM,
+                                  "durable": self.durable, "start": self.start,
+                                  "cursor": self.cursor, "deferred": self.deferred})
+
+    def ready_for(self, epoch):
+        """A strict caller may withhold a new traffic boundary until policy catches up."""
+        return not self.deferred and all(peer.epoch == epoch for peer in self.pair)
+
+    def boundary(self, epoch):
+        if not self.ready_for(epoch):
+            raise ValueError(f"{self.durable} has unresolved policy history at epoch {epoch}")
+        boundary(self.pair, epoch)
 
     async def connect(self):
         nats, api = load_nats()
@@ -209,6 +246,8 @@ class Subscriber:
 
     async def through(self, target):
         # The publish ack is a test barrier. All payloads come from the durable consumer.
+        if self.state_file is not None:
+            await self._drain_deferred()
         while self.cursor < target:
             msg, = await self.sub.fetch(1, timeout=5)
             seq = msg.metadata.sequence.stream
@@ -216,14 +255,68 @@ class Subscriber:
             logging.info("%s delivery seq=%d age=%.3fs", self.durable, seq, age)
             if seq > self.cursor + 1:
                 raise RuntimeError(f"{self.durable} lost stream history before {seq}")
-            if seq <= self.cursor or not -5 <= age <= 3600:
+            previous = self.cursor, list(self.deferred)
+            if seq <= self.cursor or age < -5 or (self.state_file is None and age > 3600):
                 logging.warning("%s rejected duplicate sequence or stale broker timestamp", self.durable)
             else:
-                # Republishing gets fresh metadata. Verify the signed epoch too.
-                for peer in self.pair:
-                    peer.receive_certificate(msg.data, msg.subject)
+                self._deliver(msg.data, msg.subject, seq)
             self.cursor = max(self.cursor, seq)
+            try:
+                self._persist()
+            except Exception:
+                self.cursor, self.deferred = previous
+                raise
+            if self.state_file is not None:
+                await self._drain_deferred()
             await msg.ack_sync()
+
+    def _deliver(self, data, subject, seq):
+        if self.state_file is None:
+            for peer in self.pair:
+                peer.receive_certificate(data, subject)
+            return
+        try:
+            advisory, votes = decode_certificate(data, subject)
+        except ValueError:
+            for peer in self.pair:
+                peer.receive_certificate(data, subject)
+            return
+        deferred = False
+        for peer in self.pair:
+            if advisory.epoch > peer.epoch + 1 and quorum(advisory, votes, peer.roster, peer.verifier):
+                deferred = True
+            else:
+                peer.receive(advisory, votes)
+        if deferred:
+            if len(self.deferred) >= self.MAX_DEFERRED:
+                raise RuntimeError(f"{self.durable} deferred certificate limit reached")
+            self.deferred.append(seq)
+
+    async def _drain_deferred(self):
+        if not self.deferred:
+            return
+        js = self.nc.jetstream()
+        while True:
+            progress = False
+            for seq in list(self.deferred):
+                raw = await js.get_msg(STREAM, seq=seq)
+                if raw.seq != seq or raw.data is None or raw.subject not in SUBJECTS:
+                    raise RuntimeError(f"{self.durable} cannot replay stream sequence {seq}")
+                advisory, votes = decode_certificate(raw.data, raw.subject)
+                if any(advisory.epoch > peer.epoch + 1 for peer in self.pair):
+                    continue
+                for peer in self.pair:
+                    peer.receive(advisory, votes)
+                self.deferred.remove(seq)
+                try:
+                    self._persist()
+                except Exception:
+                    self.deferred.append(seq)
+                    self.deferred.sort()
+                    raise
+                progress = True
+            if not progress:
+                return
 
 
 async def publish(js, a, votes, online):
