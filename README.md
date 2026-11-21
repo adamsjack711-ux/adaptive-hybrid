@@ -32,7 +32,18 @@ The detector reads scripted lab signals. The KEM exchanges, Ed25519 and SLH-DSA 
 
 Compare two ways to handle the same signed lattice swap. One preloads the McEliece backup during the initial handshake. The other starts with X25519 and ML-KEM-768 and runs a fresh X25519 and McEliece exchange at the swap.
 
-Measure bytes sent at setup and at the swap, plus the time from the scheduled boundary to the first successfully decrypted message. Repeat at different network delays and packet loss rates to see when faster swaps justify the additional 261,216 setup bytes per session.
+The benchmark measures bytes sent at setup and at the swap, plus the time from the scheduled boundary to the first successfully decrypted message. The loopback results cover delay and bandwidth. Testing network packet loss and measuring CPU, memory, and power on physical IoT devices are follow-up work.
+
+### Loopback network examples
+
+Run the examples with the live demo dependencies installed.
+
+```sh
+.venv/bin/python -m verification.network_examples
+.venv/bin/python -m verification.network_examples --link iot
+```
+
+Separate client and server processes exchange real KEM material and encrypted sensor readings over mutual TLS on loopback. The lab emulates link delay and bandwidth for internal, branch-office, remote, and IoT gateway scenarios. Timing starts after TLS setup and measures the interval to the first decrypted reading at each phase. Each scenario also delays one peer's signed JetStream advisory. The client decrypts a pump reading during all-rail fallback and another after catch-up. [Measured run](verification/network-results.txt)
 
 ## Architecture
 
@@ -99,7 +110,7 @@ python3 -m venv .venv
 ./run_all.sh
 ```
 
-The script starts a loopback broker with an isolated temporary store, runs Python tests, live JetStream checks, the live demo, Tamarin and ProVerif, then stops the broker and prints a pass/fail summary. For the five-node demo and KEM payload/timing output, run these commands in separate terminals:
+The script starts a loopback broker with an isolated temporary store, runs Python tests, live JetStream checks, the live demo, a smoke test for all four network examples, Tamarin and ProVerif, then stops the broker and prints a pass/fail summary. Run the next two commands in separate terminals for the five-node demo and KEM measurements.
 
 ```sh
 nats-server -js -a 127.0.0.1 -sd ./jetstream-data

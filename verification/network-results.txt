@@ -1,0 +1,22 @@
+Reference run on macOS arm64 with Python 3.15.0, liboqs 0.16.0, and NATS Server 2.15.3.
+Command: .venv/bin/python -m verification.network_examples --runs 5
+Timings start after mutual TLS setup. Both peers have staged the signed advisory before each measured
+swap in the table. The delayed-advisory checks run separately on each emulated loopback link.
+
+Authenticated loopback, emulated RTT and throughput, 5 samples per strategy and link.
+Median ms to decrypted telemetry. Byte counts include only exchange payloads.
+Link (RTT / Mbit/s)                Strategy     Setup B  Setup ms   Swap B  Swap ms
+Internal (2 ms / 100)              Preloaded    263,552     304.4        0      2.9
+Internal (2 ms / 100)              Fresh          2,336       4.5  261,280    125.6
+Branch office (50 ms / 10)         Preloaded    263,552     515.7        0     56.9
+Branch office (50 ms / 10)         Fresh          2,336      58.6  261,280    564.7
+Constrained remote (150 ms / 2)    Preloaded    263,552    1705.7        0    159.8
+Constrained remote (150 ms / 2)    Fresh          2,336     168.5  261,280   1374.6
+IoT gateway (150 ms / 0.512)       Preloaded    263,552    4510.5        0    166.9
+IoT gateway (150 ms / 0.512)       Fresh          2,336     195.3  261,280   4368.6
+PASS delayed advisory on Internal: decrypted in 3.1 ms on all rails, then decrypted again after catch-up.
+PASS delayed advisory on Branch office: decrypted in 57.0 ms on all rails, then decrypted again after catch-up.
+PASS delayed advisory on Constrained remote: decrypted in 164.7 ms on all rails, then decrypted again after catch-up.
+PASS delayed advisory on IoT gateway: decrypted in 166.2 ms on all rails, then decrypted again after catch-up.
+  Client decrypted during fallback: {"sensor":"pump-07","sample":2,"temperature_c":32.5}
+  Client decrypted after catch-up:   {"sensor":"pump-07","sample":3,"temperature_c":32.6}
