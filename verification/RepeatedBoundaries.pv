@@ -1,0 +1,68 @@
+(* Three rail secrets are deliberately reused across four completed boundaries.
+   The classical input is disclosed once; both PQ inputs stay private throughout.
+   This narrow model checks repeated-key secrecy and endpoint agreement, not
+   policy delivery, process restart, or later compromise of PQ secrets. *)
+free net: channel.
+const agreed, normal, swapped, classicalBreak, allRails: bitstring.
+const active, fallback, leftRole, rightRole: bitstring.
+fun hkdf(bitstring,bitstring,bitstring,bitstring): bitstring.
+fun tag(bitstring,bitstring,bitstring,bitstring): bitstring.
+fun confirm(bitstring,bitstring): bitstring.
+event clientKey(bitstring,bitstring,bitstring).
+event serverKey(bitstring,bitstring,bitstring).
+query r:bitstring,m:bitstring,k:bitstring;
+ event(clientKey(r,m,k)) && attacker(k) ==> false.
+query r:bitstring,m:bitstring,k:bitstring;
+ event(serverKey(r,m,k)) && attacker(k) ==> false.
+query r:bitstring,m:bitstring,k:bitstring;
+ inj-event(serverKey(r,m,k)) ==> inj-event(clientKey(r,m,k)).
+query r:bitstring,s:bitstring,m:bitstring,n:bitstring,k:bitstring;
+ event(clientKey(r,m,k)) && event(clientKey(s,n,k)) && r <> s ==> false.
+query r:bitstring,k:bitstring; event(serverKey(r,normal,k)).
+query r:bitstring,k:bitstring; event(serverKey(r,swapped,k)).
+query r:bitstring,k:bitstring; event(serverKey(r,classicalBreak,k)).
+query r:bitstring,k:bitstring; event(serverKey(r,allRails,k)).
+
+letfun endpoint(role:bitstring, local:bitstring, remote:bitstring, traffic:bitstring,
+                tr:bitstring,r:bitstring,x:bitstring,l:bitstring,c:bitstring) =
+ let (le:bitstring,lt:bitstring,lf:bitstring) = local in
+ let (re:bitstring,rt:bitstring,rf:bitstring) = remote in
+ let views = if role=leftRole then (local,remote) else (remote,local) in
+ let ctx = (tr,r,traffic,views) in
+ if local=remote && le=traffic && lf=agreed then
+   if lt=normal then (normal,hkdf((x,l),ctx,active,normal))
+   else if lt=swapped then (swapped,hkdf((x,c),ctx,active,swapped))
+   else (classicalBreak,hkdf((l,c),ctx,active,classicalBreak))
+ else
+   let label = if role=leftRole then tag(fallback,traffic,le,re)
+               else tag(fallback,traffic,re,le) in
+   (allRails,hkdf((x,l,c),ctx,label,allRails)).
+
+process
+ new x:bitstring; new l:bitstring; new c:bitstring; new tr:bitstring;
+ new r0:bitstring; new r1:bitstring; new r2:bitstring; new r3:bitstring;
+ out(net,(tr,r0,r1,r2,r3,x));
+ let a0 = (r0,normal,agreed) in
+ let (m0:bitstring,k0:bitstring)=endpoint(leftRole,a0,a0,r0,tr,r0,x,l,c) in
+ event clientKey(r0,m0,k0);
+ let (n0:bitstring,q0:bitstring)=endpoint(rightRole,a0,a0,r0,tr,r0,x,l,c) in
+ event serverKey(r0,n0,q0); out(net,confirm(q0,r0));
+
+ let a1 = (r1,swapped,agreed) in
+ let (m1:bitstring,k1:bitstring)=endpoint(leftRole,a1,a1,r1,tr,r1,x,l,c) in
+ event clientKey(r1,m1,k1);
+ let (n1:bitstring,q1:bitstring)=endpoint(rightRole,a1,a1,r1,tr,r1,x,l,c) in
+ event serverKey(r1,n1,q1); out(net,confirm(q1,r1));
+
+ let a2 = (r2,classicalBreak,agreed) in
+ let (m2:bitstring,k2:bitstring)=endpoint(leftRole,a2,a2,r2,tr,r2,x,l,c) in
+ event clientKey(r2,m2,k2);
+ let (n2:bitstring,q2:bitstring)=endpoint(rightRole,a2,a2,r2,tr,r2,x,l,c) in
+ event serverKey(r2,n2,q2); out(net,confirm(q2,r2));
+
+ let a3 = (r3,normal,agreed) in
+ let b3 = (r2,normal,agreed) in
+ let (m3:bitstring,k3:bitstring)=endpoint(leftRole,a3,b3,r3,tr,r3,x,l,c) in
+ event clientKey(r3,m3,k3);
+ let (n3:bitstring,q3:bitstring)=endpoint(rightRole,b3,a3,r3,tr,r3,x,l,c) in
+ event serverKey(r3,n3,q3); out(net,confirm(q3,r3))

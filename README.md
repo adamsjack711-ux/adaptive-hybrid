@@ -45,6 +45,16 @@ Run the examples with the live demo dependencies installed.
 
 Separate client and server processes exchange real KEM material and encrypted sensor readings over mutual TLS on loopback. The lab emulates link delay and bandwidth for internal, branch-office, remote, and IoT gateway scenarios. Timing starts after TLS setup and measures the interval to the first decrypted reading at each phase. Each scenario also delays one peer's signed JetStream advisory. The client decrypts a pump reading during all-rail fallback and another after catch-up. [Measured run](verification/network-results.txt)
 
+### Authenticated session and restart
+
+Run the multi-boundary lab flow with the same KEM dependencies:
+
+```sh
+.venv/bin/python -m verification.durable_session
+```
+
+Two independent processes exchange all three KEM rails and boundary offers over mutual TLS. They verify signed lattice advisories and exchange encrypted packets at epochs 0, 1 and 2. The harness then hard-kills the server. New client and server processes restore peer policy and the signers' identity keys and last-voted epoch, perform a **fresh** three-rail handshake, and exchange packets at epochs 2 and 3. The restored peer starts with no traffic key until its first authenticated boundary. State files use atomic replacement and owner-only permissions; they contain policy and signer keys, but no KEM secrets or traffic keys. This is a loopback lab with a temporary CA and local files, not a deployment key store. [Run output](verification/durable-results.txt)
+
 ## Architecture
 
 The handshake establishes three independent secrets. Normal operation combines X25519 and ML-KEM-768 in HKDF. A certified lattice swap replaces ML-KEM with Classic McEliece-348864. A classical swap uses both post-quantum rails.
@@ -83,7 +93,7 @@ The message parser rejects duplicate fields, unknown fields and mismatched subje
 
 An adversary can delay, reorder, replay, withhold or alter advisory traffic. Peers provision voter public keys ahead of time and validate signed bodies locally. Two three-vote quorums can share as few as one voter, so one voter signing both proposals can enable conflicting certificates. The formal fork witness exercises a case with two compromised voters. An honest peer remembers a valid conflict it observes at its current epoch.
 
-The demo trusts the initial in-process exchange to supply matching secrets and a common transcript. It also trusts the in-process exchange of genuine offers and the shared boundary schedule. An operational deployment would need an authenticated network handshake, authenticated offers and a durable record of peer and signer state.
+The fleet demo trusts its initial in-process exchange to supply matching secrets and a common transcript. The separate-process lab uses mutual TLS for that exchange and for genuine offers, with a common boundary schedule supplied by the lab harness. An operational deployment still needs provisioned identities, protected persistent keys, a durable delivery cursor, and a recovery protocol for missing epochs.
 
 ## Run locally
 
@@ -127,14 +137,14 @@ nats-server -js -a 127.0.0.1 -sd ./jetstream-data
 | Python unit and Hypothesis tests | Generated crash, withhold, replay and competing-certificate schedules kept both peers in agreement. Each emitted key included post-quantum input. Fuzzed advisory, certificate and offer inputs were rejected without state changes. |
 | Live JetStream | Five sessions exercised quorum loss, replay and fork detection with real signatures and KEMs. A separate session checked encrypted traffic in both directions through repeated rekeying, split delivery, a hard broker restart, and suspension and recovery. [Run output](verification/live-results.txt) |
 | Tamarin 1.12.0 | 30 maintained lemmas and reachability checks verified across the advisory, boundary and two-compromised-signer theories. [Results](verification/results.txt) |
-| ProVerif 2.05 | Two traffic-key secrecy queries and one injective key-agreement query passed. Four reachability queries exercised normal, lattice swap, classical swap and all-rail fallback. [Results](verification/proverif-results.txt) |
+| ProVerif 2.05 | The original one-boundary model and a four-boundary fixed schedule each passed two traffic-key secrecy queries and one injective key-agreement query. The repeated model also checked distinct keys across boundaries. Each reached normal, lattice swap, classical swap and all-rail fallback. The repeated model reuses the same rail secrets and discloses X25519 throughout. [Results](verification/proverif-results.txt), [repeated results](verification/repeated-results.txt) |
 | Timing checks | The boundary key comparison calls `hmac.compare_digest`. Tests check delegation to the native Ed25519 and SLH-DSA verifiers. The live run samples timings with equal-length inputs. |
 
 Pushes run bounded Hypothesis tests, ProVerif and the fast Tamarin theories. Manual dispatch adds the maintained fork theory and can optionally run the larger exploratory fork search. [Proof scope and composition](verification/README.md)
 
 ## Scope and limitations
 
-- ProVerif covers **one completed boundary per fresh session**, with at least one selected post-quantum secret assumed private. Disclosure across multiple boundaries that reuse KEM secrets is outside that model.
+- The original ProVerif model covers **one completed boundary per fresh session**, with at least one selected post-quantum secret assumed private. The repeated-boundary model covers one fixed four-boundary schedule with the same rail secrets and a disclosed X25519 secret; both post-quantum secrets remain private. Adaptive schedules and later disclosure of either post-quantum secret are outside that model.
 - Successive traffic keys depend on the original rail secrets. Disclosure of all three rail secrets and the round inputs exposes traffic keys from that session. Recovering after that disclosure requires a fresh key exchange.
 - An agreed hash swap suspends key derivation. During split delivery, all-rail fallback still depends on HKDF-SHA256.
 - The fork result uses **reachability with two compromised signers** and a composition argument across the certificate, peer-state and boundary theories. It applies when a valid conflicting certificate reaches a peer while the conflicting epoch is current. A late conflict can arrive after a peer has advanced.
@@ -142,9 +152,10 @@ Pushes run bounded Hypothesis tests, ProVerif and the fast Tamarin theories. Man
 - **Classic McEliece is a dormant backup with a 261 KB payload** exchanged up front. It adds 261,216 bytes to the raw handshake, which totals 263,552 bytes before framing. It is used for swaps that need it and for all-rail fallback.
 - The prototype assumes genuine offers and a common schedule. Its symbolic results do not establish computational secrecy, correctness of native crypto libraries or timing properties. Signature checks use library verifiers on public inputs, and the timing samples describe one run.
 - The generated schedules use a second Ed25519 key to exercise the dual-signature logic deterministically. The live tests cover actual SLH-DSA and the actual KEMs. The test scenarios retain the in-memory peers and voters across broker restart.
+- The authenticated restart lab persists signer keys and peer policy in owner-only files, then performs a fresh KEM exchange. It does not resume an interrupted traffic session, protect keys from a compromised host, or authenticate a production boundary scheduler.
 
 ## Future work
 
-Add authenticated transport and offers, persistent vote and fork state, recovery from missing epochs, and a refresh mechanism for long-lived sessions. Extend the symbolic models to multiple boundaries per session and measure the backup payload and broker failure behavior across a distributed deployment.
+Add a provisioned identity and protected key store, recovery from missing epochs, and a refresh mechanism for long-lived sessions. Extend the repeated-boundary symbolic model to adversarial schedules and evolving compromise, and measure the backup payload and broker failure behavior across a distributed deployment.
 
 Released under the [MIT License](LICENSE).

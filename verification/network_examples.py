@@ -140,10 +140,10 @@ def transcript(rails, public, replies):
     return hashlib.sha256("|".join(ALGORITHMS[rail] for rail in rails).encode() + b"".join(payloads)).digest()
 
 
-def make_peer(role, identity_keys, verifier, secrets, digest):
+def make_peer(role, identity_keys, verifier, secrets, digest, state_path=None):
     roster = {name: (Ed25519PublicKey.from_public_bytes(ed), slh) for name, ed, slh in identity_keys}
     key = derive(secrets, NORMAL, digest, b"initial-v1", 0)
-    return Peer(role, roster, verifier, (secrets, digest, key))
+    return Peer(role, roster, verifier, (secrets, digest, key), state_path)
 
 
 def packet(peer, message):

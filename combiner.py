@@ -11,19 +11,68 @@ from contextlib import AsyncExitStack, ExitStack
 from dataclasses import replace
 from pathlib import Path
 
+from durable import StateFile
 from detector import ASSUMPTIONS, GENESIS, SLH, TIERS, Detector, Voter, quorum
 from handshake import RAILS, derive, handshake, keys_match, require_kems
 from wire import decode_certificate, decode_offer, encode_certificate, encode_offer, valid_epoch, valid_offer
 
 
 class Peer:
-    def __init__(self, name, roster, verifier, session):
+    def __init__(self, name, roster, verifier, session, state_path=None):
         self.name, self.roster, self.verifier = name, roster, verifier
         self.secrets, self.transcript, self.key = session
         self.states = dict.fromkeys(ASSUMPTIONS, "normal")
         self.epoch, self.head, self.last_digest = 0, GENESIS, None
         self.round, self.fork, self.fallback = 0, False, False
         self.rails = RAILS[:2]
+        self.state_file = StateFile(state_path) if state_path is not None else None
+        if self.state_file is not None:
+            self._restore_or_initialize()
+
+    def _roster_digest(self):
+        members = [(name, ed.public_bytes_raw().hex(), slh.hex() if slh else "")
+                   for name, (ed, slh) in sorted(self.roster.items())]
+        return hashlib.sha256(json.dumps(members, separators=(",", ":")).encode()).hexdigest()
+
+    def _persist(self):
+        if self.state_file is not None:
+            self.state_file.save({"version": 1, "kind": "peer", "name": self.name,
+                                  "roster": self._roster_digest(), "epoch": self.epoch,
+                                  "head": self.head.hex(),
+                                  "last_digest": self.last_digest.hex() if self.last_digest else None,
+                                  "states": self.states, "fork": self.fork})
+
+    def _restore_or_initialize(self):
+        from wire import valid_epoch
+        record = self.state_file.load()
+        if record is None:
+            self._persist()
+            return
+        if (set(record) != {"version", "kind", "name", "roster", "epoch", "head",
+                            "last_digest", "states", "fork"}
+                or record["version"] != 1 or record["kind"] != "peer"
+                or record["name"] != self.name or record["roster"] != self._roster_digest()
+                or not valid_epoch(record["epoch"])
+                or type(record["fork"]) is not bool
+                or not isinstance(record["states"], dict)
+                or set(record["states"]) != set(ASSUMPTIONS)
+                or any(tier not in TIERS for tier in record["states"].values())):
+            raise ValueError("peer state does not match identity, roster, or schema")
+        try:
+            head = bytes.fromhex(record["head"])
+            last = (bytes.fromhex(record["last_digest"])
+                    if record["last_digest"] is not None else None)
+        except (TypeError, ValueError):
+            raise ValueError("invalid peer state hashes") from None
+        if (len(head) != 32 or (last is not None and len(last) != 32)
+                or (record["epoch"] == 0) != (last is None)):
+            raise ValueError("invalid peer state hashes")
+        self.epoch, self.head, self.last_digest = record["epoch"], head, last
+        self.states, self.fork = record["states"], record["fork"]
+        # A process restart cannot resume the old traffic session: no KEM
+        # secrets or traffic keys are stored. Activate a fresh boundary first.
+        if self.epoch:
+            self.key, self.rails = None, ()
 
     def receive(self, advisory, votes):
         # Stage certified policy until the next handshake boundary.
@@ -40,12 +89,24 @@ class Peer:
         elif not quorum(advisory, votes, self.roster, self.verifier):
             reason = "insufficient valid distinct votes"
         elif epoch == self.epoch:
+            previous_fork = self.fork
             self.fork = True
+            try:
+                self._persist()
+            except Exception:
+                self.fork = previous_fork
+                raise
             reason = "conflicting certified advisory"
         else:
+            previous = self.epoch, self.last_digest, self.head, dict(self.states)
             self.epoch, self.last_digest = epoch, digest
             self.head = hashlib.sha256(self.head + digest).digest()
             self.states[advisory.assumption] = advisory.tier
+            try:
+                self._persist()
+            except Exception:
+                self.epoch, self.last_digest, self.head, self.states = previous
+                raise
             logging.info("%s staged epoch=%d %s=%s", self.name, epoch,
                          advisory.assumption, advisory.tier)
             return True

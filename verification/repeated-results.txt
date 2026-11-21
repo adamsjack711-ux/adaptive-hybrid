@@ -1,0 +1,8 @@
+RESULT not (event(clientKey(r_8,m,k)) && attacker(k)) is true.
+RESULT not (event(serverKey(r_8,m,k)) && attacker(k)) is true.
+RESULT inj-event(serverKey(r_8,m,k)) ==> inj-event(clientKey(r_8,m,k)) is true.
+RESULT not (event(clientKey(r_8,m,k)) && event(clientKey(s,n,k)) && r_8 ≠ s) is true.
+RESULT not event(serverKey(r_8,normal,k)) is false.
+RESULT not event(serverKey(r_8,swapped,k)) is false.
+RESULT not event(serverKey(r_8,classicalBreak,k)) is false.
+RESULT not event(serverKey(r_8,allRails,k)) is false.
