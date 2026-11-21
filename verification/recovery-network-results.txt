@@ -1,0 +1,11 @@
+liboqs-python faulthandler is disabled
+liboqs-python faulthandler is disabled
+liboqs-python faulthandler is disabled
+liboqs-python faulthandler is disabled
+WARNING:root:network-server rejected duplicate sequence or stale broker timestamp
+WARNING:root:network-server rejected duplicate sequence or stale broker timestamp
+WARNING:root:network-client rejected duplicate sequence or stale broker timestamp
+WARNING:root:network-client rejected duplicate sequence or stale broker timestamp
+PASS two mutually authenticated processes withheld epoch 2 and blocked a new traffic boundary
+PASS hard broker and endpoint restarts recovered signed epochs 2 and 3 from JetStream
+PASS fresh three-rail KEM session exchanged encrypted sensor data at epoch 3
