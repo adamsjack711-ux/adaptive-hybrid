@@ -7,6 +7,9 @@ from pathlib import Path
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
+
+from durable import StateFile
 
 SLH = "SLH_DSA_PURE_SHA2_128F"
 GENESIS = bytes(32)
@@ -31,14 +34,51 @@ class Advisory:
 
 
 class Voter:
-    def __init__(self, name, oqs, stack):
+    def __init__(self, name, oqs, stack, state_path=None):
         self.name = name
-        self.ed = Ed25519PrivateKey.generate()
-        self.slh = None
-        if SLH in oqs.get_enabled_sig_mechanisms():
-            self.slh = stack.enter_context(oqs.Signature(SLH))
-        self.public = (self.ed.public_key(), self.slh.generate_keypair() if self.slh else None)
-        self.last = 0
+        self.state_file = StateFile(state_path) if state_path is not None else None
+        record = self.state_file.load() if self.state_file is not None else None
+        if record is None:
+            self.ed = Ed25519PrivateKey.generate()
+            self.slh = (stack.enter_context(oqs.Signature(SLH))
+                        if SLH in oqs.get_enabled_sig_mechanisms() else None)
+            slh_public = self.slh.generate_keypair() if self.slh else None
+            self.last = 0
+        else:
+            if (set(record) != {"version", "kind", "name", "last", "ed_private",
+                               "slh_private", "slh_public"}
+                    or record["version"] != 1 or record["kind"] != "voter"
+                    or record["name"] != name or type(record["last"]) is not int
+                    or record["last"] < 0):
+                raise ValueError("invalid voter state")
+            try:
+                self.ed = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(record["ed_private"]))
+                slh_private = (bytes.fromhex(record["slh_private"])
+                               if record["slh_private"] is not None else None)
+                slh_public = (bytes.fromhex(record["slh_public"])
+                              if record["slh_public"] is not None else None)
+            except (TypeError, ValueError):
+                raise ValueError("invalid voter key material") from None
+            if (slh_private is None) != (slh_public is None):
+                raise ValueError("incomplete voter key material")
+            if slh_private is not None and SLH not in oqs.get_enabled_sig_mechanisms():
+                raise ValueError("stored SLH-DSA key cannot be loaded")
+            self.slh = (stack.enter_context(oqs.Signature(SLH, slh_private))
+                        if slh_private is not None else None)
+            self.last = record["last"]
+        self.public = self.ed.public_key(), slh_public
+        if record is None:
+            self._persist()
+
+    def _persist(self):
+        if self.state_file is not None:
+            self.state_file.save({
+                "version": 1, "kind": "voter", "name": self.name, "last": self.last,
+                "ed_private": self.ed.private_bytes(Encoding.Raw, PrivateFormat.Raw,
+                                                     NoEncryption()).hex(),
+                "slh_private": self.slh.export_secret_key().hex() if self.slh else None,
+                "slh_public": self.public[1].hex() if self.public[1] else None,
+            })
 
     def vote(self, advisory):
         if advisory.epoch <= self.last:
@@ -50,9 +90,17 @@ class Voter:
         if lattice and not self.slh:
             logging.warning("%s abstained epoch=%d: SLH-DSA unavailable", self.name, advisory.epoch)
             return None
+        ed_signature = self.ed.sign(body)
+        slh_signature = self.slh.sign(body) if lattice else b""
+        previous_last = self.last
         self.last = advisory.epoch
+        try:
+            self._persist()
+        except Exception:
+            self.last = previous_last
+            raise
         logging.info("%s voted epoch=%d tier=%s", self.name, self.last, advisory.tier)
-        return self.name, self.ed.sign(body), self.slh.sign(body) if lattice else b""
+        return self.name, ed_signature, slh_signature
 
 
 def quorum(advisory, votes, roster, verifier):

@@ -1,0 +1,8 @@
+liboqs-python faulthandler is disabled
+liboqs-python faulthandler is disabled
+liboqs-python faulthandler is disabled
+liboqs-python faulthandler is disabled
+liboqs-python faulthandler is disabled
+PASS two authenticated processes completed three policy epochs
+PASS hard server crash and new peer processes retained signer identity, vote floor and policy
+PASS fresh three-rail handshake resumed encrypted traffic at a new boundary

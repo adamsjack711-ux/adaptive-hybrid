@@ -35,6 +35,7 @@ verification/tmp/
 *.der
 *.pkcs8
 *.key
+*.state
 *.p12
 *.pfx
 *.jks

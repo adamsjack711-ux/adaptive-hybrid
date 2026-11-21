@@ -1,5 +1,7 @@
 # Adaptive hybrid key exchange verification
 
+`crosscheck.sh` runs two ProVerif models. `Combiner.pv` checks one completed boundary per fresh session. `RepeatedBoundaries.pv` checks four successive boundaries using the same three secrets: normal, lattice swap, classical swap, then all-rail fallback. It discloses X25519 at the start while keeping both post-quantum secrets private. Its secrecy, injective agreement and distinct-key queries pass within that fixed schedule. It does not model adaptive compromise or policy delivery. [Repeated model output](repeated-results.txt)
+
 From the repository root, run `./verification/verify.sh` for all 30 maintained lemmas. Pass `--fast` for Advisory and Boundary or `--slow` for the two-signer fork reachability theory. The fast theories each have a 120-second timeout. The reference run used Tamarin 1.12.0 and Maude 3.5.1. [Tool setup](../README.md#run-locally)
 
 `./verification/verify.sh --exploratory` runs the older, unconstrained fork witness search in `ForkWitness.spthy`. It has a separate 900-second budget and can be inconclusive. The maintained fork argument uses `ForkReachability.spthy` below.

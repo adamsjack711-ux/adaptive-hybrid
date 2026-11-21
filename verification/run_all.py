@@ -36,6 +36,8 @@ def main():
         check("Live demo", lambda: command(sys.executable, "-u", "-m", "verification.demo"))
         check("Network examples", lambda: command(sys.executable, "-u", "-m", "verification.network_examples",
                                                    "--runs", "1"))
+        check("Authenticated durable session", lambda: command(
+            sys.executable, "-u", "-m", "verification.durable_session"))
         check("Tamarin", lambda: command("./verification/verify.sh"))
         check("ProVerif", lambda: command("./verification/crosscheck.sh"))
 
