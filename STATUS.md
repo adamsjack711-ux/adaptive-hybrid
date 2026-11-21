@@ -20,6 +20,6 @@ Working branch: `feat/authenticated-durable-sessions`. Tested code commit: `4344
 
 Tamarin theories were unchanged and were not rerun locally. The new repeated-boundary model is a fixed symbolic schedule; it does not cover adaptive compromise or computational security. The restart flow uses a temporary lab CA and local key files. A deployment still needs provisioned identities, protected key storage, a durable broker cursor, and a recovery protocol for missing epochs. No revision was deployed or accepted by a user.
 
-The branch was pushed to `origin/feat/authenticated-durable-sessions`. A draft PR could not be opened: the connected GitHub app returned 403, the local `gh` login is invalid, and automatic approval review rejected retrieving a saved Git credential to create the PR. No PR was created.
+The branch was pushed to `origin/feat/authenticated-durable-sessions`, and [draft PR #1](https://github.com/adamsjack711-ux/adaptive-hybrid/pull/1) is open against `main`. GitHub CI passed on `24f3da9` before this status-only update.
 
-Next integration step: use a GitHub connection with pull-request write access to open a draft PR, then review and merge into `main`. Design the deployment components as a separate milestone.
+Next integration step: review PR #1 and merge into `main` when ready. Design the deployment components as a separate milestone.
