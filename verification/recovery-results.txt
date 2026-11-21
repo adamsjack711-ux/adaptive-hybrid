@@ -1,0 +1,16 @@
+liboqs-python faulthandler is disabled
+WARNING:root:recovery-0 rejected duplicate sequence or stale broker timestamp
+WARNING:root:recovery-1 rejected duplicate sequence or stale broker timestamp
+WARNING:root:recovery-2 rejected duplicate sequence or stale broker timestamp
+PASS epoch 4 before 3: five cursors and policies recovered across broker and peer restart
+PASS epoch 8 before 7: offline nodes replayed retained certificates in order
+WARNING:root:recovery-1 rejected duplicate sequence or stale broker timestamp
+WARNING:root:recovery-3 rejected duplicate sequence or stale broker timestamp
+WARNING:root:recovery-0 rejected duplicate sequence or stale broker timestamp
+WARNING:root:recovery-2 rejected duplicate sequence or stale broker timestamp
+WARNING:root:recovery-4 rejected duplicate sequence or stale broker timestamp
+WARNING:root:recovery-1 rejected duplicate sequence or stale broker timestamp
+WARNING:root:recovery-3 rejected duplicate sequence or stale broker timestamp
+WARNING:root:recovery-0 rejected duplicate sequence or stale broker timestamp
+WARNING:root:recovery-2 rejected duplicate sequence or stale broker timestamp
+PASS 5 nodes, 12 signed epochs, two hard broker restarts, 100 encrypted packets, no repeated traffic keys
